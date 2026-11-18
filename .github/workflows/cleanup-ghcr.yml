@@ -1,0 +1,20 @@
+name: Cleanup GHCR
+
+on:
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+jobs:
+  purge:
+    name: Delete all package versions except latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Delete specified package versions
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: go-github-mcp
+          package-type: container
+          package-version-ids: "1586178149,1586178083,1586161085,1586161034,1586160971,1586153364,1586153318,1586138495,1586130176,1586103190,1586054809"
