@@ -1,0 +1,13 @@
+# secrets
+.env
+.env.*
+
+# build/test artifacts
+coverage.out
+dist/
+/bin/
+
+# editors
+.idea/
+.vscode/
+*.swp

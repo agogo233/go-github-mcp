@@ -1,0 +1,27 @@
+services:
+  go-github-mcp:
+    build: .
+    # image: ghcr.io/agogo233/go-github-mcp:latest
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      # Loopback by default; put a TLS reverse proxy in front for LAN/team use.
+      - "127.0.0.1:8080:8080"
+    environment:
+      MCP_TRANSPORT: http
+      GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_PERSONAL_ACCESS_TOKEN}
+      AUTH_TOKEN: ${AUTH_TOKEN}
+      # GITHUB_HOST: ghe.example.com
+      # GITHUB_TOOLSETS: default
+      # GITHUB_TOOLS: get_me
+      # READ_ONLY: "false"
+      # ALLOW_UNAUTHENTICATED: "false"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
