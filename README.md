@@ -148,6 +148,12 @@ CI runs lint + tests + build on pushes and PRs that touch Go code or CI
 configuration, and publishes the image to
 `ghcr.io/agogo233/go-github-mcp` on `main` pushes and `v*` tags.
 
+A manual **Smoke** workflow (`workflow_dispatch`) runs the built binary
+end-to-end against the real GitHub API with read-only calls only (stdio
+handshake + `get_me`, HTTP auth checks, insecure-startup refusal). It requires
+the `SMOKE_GITHUB_TOKEN` repository secret; without it the job fails with an
+explicit message.
+
 ## License
 
 [MIT](./LICENSE)

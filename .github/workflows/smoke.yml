@@ -1,0 +1,144 @@
+name: Smoke
+
+# Manual end-to-end smoke test against the real GitHub API (read-only calls).
+# Requires the SMOKE_GITHUB_TOKEN repository secret (a PAT; any scope that can
+# read the authenticated user is enough). Trigger via workflow_dispatch.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-manual
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: End-to-end smoke (read-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build -trimpath -o bin/go-github-mcp ./cmd/server
+
+      - name: Check smoke token is configured
+        env:
+          SMOKE_TOKEN: ${{ secrets.SMOKE_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$SMOKE_TOKEN" ]; then
+            echo "::error::SMOKE_GITHUB_TOKEN secret is not set; configure it to run the smoke test."
+            exit 1
+          fi
+          case "$SMOKE_TOKEN" in
+            ghp_*|github_pat_*|gho_*) echo "token format ok";;
+            *) echo "::warning::unexpected token format; continuing";;
+          esac
+
+      - name: Negative - insecure unauthenticated startup must be refused
+        env:
+          GITHUB_PERSONAL_ACCESS_TOKEN: ${{ secrets.SMOKE_GITHUB_TOKEN }}
+          MCP_TRANSPORT: http
+          ALLOW_UNAUTHENTICATED: "true"
+          HTTP_ADDR: 0.0.0.0:8080
+        run: |
+          set +e
+          out=$(timeout 60 ./bin/go-github-mcp 2>&1)
+          code=$?
+          set -e
+          echo "$out" | grep -q "refusing to start" || { echo "expected refusal log, got:"; echo "$out"; exit 1; }
+          [ "$code" -ne 0 ] || { echo "process should exit non-zero"; exit 1; }
+          echo "insecure startup correctly refused (exit $code)"
+
+      - name: Stdio smoke - initialize, tools/list, get_me
+        env:
+          GITHUB_PERSONAL_ACCESS_TOKEN: ${{ secrets.SMOKE_GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json, subprocess
+
+          p = subprocess.Popen(
+              ["./bin/go-github-mcp"],
+              stdin=subprocess.PIPE,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.DEVNULL,
+              text=True,
+          )
+
+          def send(obj):
+              p.stdin.write(json.dumps(obj) + "\n")
+              p.stdin.flush()
+
+          def recv_until(want_id):
+              while True:
+                  line = p.stdout.readline()
+                  if not line:
+                      raise SystemExit("stdio closed before response id %s" % want_id)
+                  try:
+                      msg = json.loads(line)
+                  except json.JSONDecodeError:
+                      continue
+                  if msg.get("id") == want_id:
+                      return msg
+
+          send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+              "protocolVersion": "2024-11-05", "capabilities": {},
+              "clientInfo": {"name": "smoke", "version": "0"}}})
+          init = recv_until(1)
+          assert "result" in init, init
+          send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+          send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+          tools = recv_until(2)
+          names = [t["name"] for t in tools["result"]["tools"]]
+          assert len(names) >= 70, "expected at least 70 tools, got %d" % len(names)
+          for must in ("get_me", "push_files", "create_issue", "list_code_scanning_alerts", "list_projects"):
+              assert must in names, "missing tool %s" % must
+
+          send({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": {"name": "get_me", "arguments": {}}})
+          me = recv_until(3)
+          assert "result" in me, me
+          data = json.loads(me["result"]["content"][0]["text"])
+          assert data.get("login"), data
+          print("stdio smoke ok: %d tools, get_me login=%s" % (len(names), data["login"]))
+          p.stdin.close()
+          p.terminate()
+          PY
+
+      - name: HTTP smoke - healthz, bearer auth, initialize
+        env:
+          GITHUB_PERSONAL_ACCESS_TOKEN: ${{ secrets.SMOKE_GITHUB_TOKEN }}
+          MCP_TRANSPORT: http
+          AUTH_TOKEN: smoke-shared-secret
+          HTTP_ADDR: 127.0.0.1:8099
+        run: |
+          ./bin/go-github-mcp &
+          pid=$!
+          trap 'kill $pid 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8099/healthz >/dev/null && break
+            sleep 1
+          done
+
+          code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8099/healthz)
+          [ "$code" = "200" ] || { echo "healthz status=$code, want 200"; exit 1; }
+
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8099/mcp \
+            -H 'Content-Type: application/json' -d '{}')
+          [ "$code" = "401" ] || { echo "unauthenticated /mcp status=$code, want 401"; exit 1; }
+
+          resp=$(curl -s -X POST http://127.0.0.1:8099/mcp \
+            -H 'Authorization: Bearer smoke-shared-secret' \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}')
+          echo "$resp" | grep -q '"result"' || { echo "initialize failed: $resp"; exit 1; }
+          echo "http smoke ok: healthz 200, missing token 401, initialize ok"
