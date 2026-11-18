@@ -116,7 +116,7 @@ func RegisterIssues(r Registrar, client *github.Client) {
 		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
 		mcp.WithNumber("issue_number", mcp.Required(), mcp.Description("Issue number")),
 		mcp.WithString("title", mcp.Description("New title")),
-		mcp.WithString("body", mcp.Description("New body")),
+		mcp.WithString("body", mcp.Description("New body; omit or pass null to keep the current body unchanged")),
 		mcp.WithString("state", mcp.Description("New state: open or closed")),
 		mcp.WithString("state_reason", mcp.Description("Reason for the state change: completed, not_planned, reopened")),
 		mcp.WithArray("labels",

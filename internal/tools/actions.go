@@ -64,7 +64,7 @@ func RegisterActions(r Registrar, client *github.Client) {
 		mcp.WithDescription("List workflow runs of a repository, optionally scoped to one workflow."),
 		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
 		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
-		mcp.WithNumber("workflow_id", mcp.Description("Restrict to this workflow ID; omit for all workflows")),
+		mcp.WithNumber("workflow_id", mcp.Description("Restrict to this workflow ID (must be an integer, not a string); omit for all workflows")),
 		mcp.WithString("branch", mcp.Description("Filter by branch name")),
 		mcp.WithString("status", mcp.Description("Filter: queued, in_progress, completed, success, failure, cancelled, ...")),
 		mcp.WithString("event", mcp.Description("Filter by event, e.g. push, pull_request, workflow_dispatch")),

@@ -3,6 +3,7 @@
 package server
 
 import (
+	"fmt"
 	"log/slog"
 	"slices"
 
@@ -15,6 +16,9 @@ import (
 )
 
 const serverName = "go-github-mcp"
+
+// validToolsetsHelp lists every selectable toolset for error messages.
+const validToolsetsHelp = "all, default, context, users, repos, git, issues, labels, pull_requests, actions, notifications, gists, discussions, stargazers, orgs, code_security, secret_protection, dependabot, security_advisories, projects"
 
 // defaultToolsets mirrors the official github-mcp-server default toolset set.
 var defaultToolsets = map[string]bool{
@@ -57,13 +61,12 @@ var knownToolsets = map[string]bool{
 	"projects":            true,
 }
 
-// New builds the MCP server with every configured tool registered.
-func New(cfg *config.Config, client *github.Client, version string) *mcpserver.MCPServer {
+// New builds the MCP server with every configured tool registered. It fails
+// fast when GITHUB_TOOLSETS contains an unknown toolset name.
+func New(cfg *config.Config, client *github.Client, version string) (*mcpserver.MCPServer, error) {
 	for _, t := range cfg.Toolsets {
 		if !knownToolsets[t] {
-			slog.Warn("unknown toolset in GITHUB_TOOLSETS; it will be ignored",
-				"toolset", t,
-				"known", "all, default, context, users, repos, git, issues, labels, pull_requests, actions, notifications, gists, discussions, stargazers, orgs, code_security, secret_protection, dependabot, security_advisories, projects")
+			return nil, fmt.Errorf("unknown toolset %q in GITHUB_TOOLSETS; valid values: %s", t, validToolsetsHelp)
 		}
 	}
 
@@ -89,34 +92,43 @@ func New(cfg *config.Config, client *github.Client, version string) *mcpserver.M
 	tools.RegisterSecurityAdvisories(r, client)
 	tools.RegisterProjects(r, client)
 
-	return s
+	return s, nil
 }
 
 // Add registers a tool unless policy excludes it. Filtering order:
 // read-only mode (write tools) -> GITHUB_TOOLS allow-list -> GITHUB_TOOLSETS.
 func (r *Registrar) Add(toolset string, writable bool, tool mcp.Tool, handler mcpserver.ToolHandlerFunc) {
-	if writable && r.cfg.ReadOnly {
-		slog.Info("skipping write tool in read-only mode", "tool", tool.GetName(), "toolset", toolset)
-		return
-	}
-	if len(r.cfg.Tools) > 0 && !slices.Contains(r.cfg.Tools, tool.GetName()) {
-		slog.Info("skipping tool not in GITHUB_TOOLS allow-list", "tool", tool.GetName(), "toolset", toolset)
-		return
-	}
-	if !r.toolsetEnabled(toolset) {
-		slog.Info("skipping tool from disabled toolset", "tool", tool.GetName(), "toolset", toolset)
+	if ok, reason := toolAllowed(r.cfg, toolset, tool.GetName(), writable); !ok {
+		slog.Info("skipping tool excluded by policy",
+			"tool", tool.GetName(), "toolset", toolset, "reason", reason)
 		return
 	}
 	r.s.AddTool(tool, handler)
 }
 
+// toolAllowed reports whether a tool passes the configuration policy, and if
+// not, why. Evaluation order matters: read-only is checked first so the
+// GITHUB_TOOLS allow-list can never re-enable a write tool.
+func toolAllowed(cfg *config.Config, toolset, tool string, writable bool) (bool, string) {
+	if writable && cfg.ReadOnly {
+		return false, "write tool disabled by READ_ONLY=true"
+	}
+	if len(cfg.Tools) > 0 && !slices.Contains(cfg.Tools, tool) {
+		return false, "tool not in GITHUB_TOOLS allow-list"
+	}
+	if !toolsetEnabled(cfg, toolset) {
+		return false, "toolset not enabled in GITHUB_TOOLSETS"
+	}
+	return true, ""
+}
+
 // toolsetEnabled reports whether a toolset is enabled by GITHUB_TOOLSETS.
 // "all" enables everything; "default" enables the official default set.
-func (r *Registrar) toolsetEnabled(name string) bool {
+func toolsetEnabled(cfg *config.Config, name string) bool {
 	all := false
 	def := false
 	direct := false
-	for _, t := range r.cfg.Toolsets {
+	for _, t := range cfg.Toolsets {
 		switch t {
 		case "all":
 			all = true

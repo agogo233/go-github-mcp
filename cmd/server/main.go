@@ -52,7 +52,11 @@ func main() {
 	}
 	slog.Info("GitHub token self-check passed", "host", cfg.GitHubHostOrDefault())
 
-	mcpServer := server.New(cfg, client, version)
+	mcpServer, err := server.New(cfg, client, version)
+	if err != nil {
+		slog.Error("failed to initialize MCP server", "error", err)
+		os.Exit(1)
+	}
 
 	switch cfg.Transport {
 	case config.TransportHTTP:

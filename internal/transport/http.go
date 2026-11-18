@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -37,8 +38,8 @@ func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config) er
 	} else if isLoopbackAddr(cfg.HTTPAddr) {
 		slog.Warn("HTTP authentication disabled via ALLOW_UNAUTHENTICATED; do not expose beyond loopback")
 	} else {
-		slog.Error("HTTP authentication disabled via ALLOW_UNAUTHENTICATED while binding a non-loopback address; "+
-			"the GitHub token is exposed to anyone who can reach this port", "addr", cfg.HTTPAddr)
+		return fmt.Errorf("refusing to start: ALLOW_UNAUTHENTICATED=true with non-loopback listen address %q "+
+			"would expose the GitHub token to anyone who can reach this port", cfg.HTTPAddr)
 	}
 
 	mux := http.NewServeMux()
@@ -118,6 +119,11 @@ func limitBody(next http.Handler, n int64) http.Handler {
 // The Authorization header is never logged.
 func auditLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			// Health probes are high-frequency and carry no audit value.
+			next.ServeHTTP(w, r)
+			return
+		}
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		defer func() {

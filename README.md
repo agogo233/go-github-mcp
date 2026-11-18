@@ -30,7 +30,7 @@ token (PAT) never leaves the server container**.
 |---|---|
 | Token storage | PAT injected via environment/secret only; never written to disk, never logged |
 | Client side | MCP clients only know the server URL + shared secret; they never see the PAT |
-| Transport auth | `Authorization: Bearer <AUTH_TOKEN>` enforced on every endpoint (constant-time compare) |
+| Transport auth | `Authorization: Bearer <AUTH_TOKEN>` enforced on the MCP endpoint `/mcp` only (`/healthz` is unauthenticated); constant-time compare |
 | Startup guard | Token self-check against `/user`; HTTP mode refuses to start without `AUTH_TOKEN` |
 | Blast radius | `GITHUB_TOOLSETS` / `GITHUB_TOOLS` allow-list, `READ_ONLY` kill switch for all write tools |
 | GHES | `GITHUB_HOST` must be https (loopback http tolerated for local dev) |
@@ -44,8 +44,8 @@ If the PAT is ever compromised: revoke it on GitHub, rotate
 |---|---|---|---|
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | yes | – | GitHub PAT (fine-grained recommended) |
 | `MCP_TRANSPORT` | no | `stdio` | `stdio` or `http` |
-| `HTTP_ADDR` | no | `0.0.0.0:8080` | HTTP listen address (HTTP mode) |
-| `AUTH_TOKEN` | http mode | – | Shared secret for Bearer auth (required in HTTP mode) |
+| `HTTP_ADDR` | no | `0.0.0.0:8080` | HTTP listen address (HTTP mode); the image `HEALTHCHECK` always probes port 8080, so keep it when changing the address |
+| `AUTH_TOKEN` | http mode | – | Shared secret for Bearer auth (required in HTTP mode); use a strong random value, e.g. `openssl rand -hex 32` |
 | `ALLOW_UNAUTHENTICATED` | no | `false` | Local-debugging escape hatch to skip Bearer auth |
 | `GITHUB_HOST` | no | `github.com` | GHES / ghe.com hostname (https enforced) |
 | `GITHUB_TOOLSETS` | no | `default` | Comma list: `default`, `all`, or named toolsets |
@@ -57,6 +57,7 @@ If the PAT is ever compromised: revoke it on GitHub, rotate
 ```bash
 cat > .env <<'EOF'
 GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_xxx
+# replace with a strong random value, e.g. openssl rand -hex 32
 AUTH_TOKEN=change-me-shared-secret
 EOF
 

@@ -109,7 +109,7 @@ func RegisterGists(r Registrar, client *github.Client) {
 	updateGist := mcp.NewTool("update_gist",
 		mcp.WithDescription("Update a gist's description and/or files. Files set to empty content are deleted."),
 		mcp.WithString("gist_id", mcp.Required(), mcp.Description("Gist ID")),
-		mcp.WithString("description", mcp.Description("New description")),
+		mcp.WithString("description", mcp.Description("New description; omit or pass null to keep the current description unchanged")),
 		mcp.WithArray("files",
 			mcp.Description("Files to upsert: array of {\"filename\": \"a.txt\", \"content\": \"text\"}; content \"\" deletes the file"),
 			gistFilesSchema,
