@@ -60,6 +60,7 @@ jobs:
       - name: Stdio smoke - initialize, tools/list, get_me
         env:
           GITHUB_PERSONAL_ACCESS_TOKEN: ${{ secrets.SMOKE_GITHUB_TOKEN }}
+          GITHUB_TOOLSETS: all
         run: |
           python3 - <<'PY'
           import json, subprocess
@@ -98,7 +99,7 @@ jobs:
           send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
           tools = recv_until(2)
           names = [t["name"] for t in tools["result"]["tools"]]
-          assert len(names) >= 70, "expected at least 70 tools, got %d" % len(names)
+          assert len(names) >= 77, "expected at least 77 tools with GITHUB_TOOLSETS=all, got %d" % len(names)
           for must in ("get_me", "push_files", "create_issue", "list_code_scanning_alerts", "list_projects"):
               assert must in names, "missing tool %s" % must
 
