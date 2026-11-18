@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/google/go-github/v72/github"
 	mcp "github.com/mark3labs/mcp-go/mcp"
@@ -111,7 +110,7 @@ func RegisterProjects(r Registrar, client *github.Client) {
 			"owner": owner, "repo": repo, "number": number, "first": first,
 		}, &out)
 		if err != nil {
-			return errResult(fmt.Sprintf("list project items (note: Projects v2 requires GraphQL access and github.com)"), err)
+			return errResult("list project items (note: Projects v2 requires GraphQL access and github.com)", err)
 		}
 		return jsonResult(out)
 	})
