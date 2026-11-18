@@ -8,10 +8,11 @@ It lets MCP clients (Claude, VS Code, Cursor, OpenCode, custom agents, ...)
 operate on GitHub through the REST/GraphQL APIs while the **personal access
 token (PAT) never leaves the server container**.
 
-> Status: M1 skeleton — `stdio` + Streamable `HTTP` transports, config
-> hardening, toolset/read-only policy framework, and the `get_me` tool.
-> More toolsets (repos, issues, pull_requests, actions, security, ...) land in
-> upcoming milestones.
+> Status: M2 — `stdio` + Streamable `HTTP` transports, config hardening,
+> toolset/read-only policy framework, and 37 tools across the `context`,
+> `users`, `repos`, `git`, `issues`, `labels` and `pull_requests` toolsets.
+> More toolsets (actions, notifications, gists, discussions, security, ...)
+> land in upcoming milestones.
 
 ## Why
 
@@ -103,15 +104,27 @@ MCP_TRANSPORT=http AUTH_TOKEN=s3cret ./bin/go-github-mcp   # http transport
 }
 ```
 
-## Tools (M1)
+## Tools (M2)
 
-| Toolset | Tool | Description |
-|---|---|---|
-| context | `get_me` | Details of the authenticated GitHub account |
+Enabled by default (`GITHUB_TOOLSETS=default`): `context`, `users`, `repos`,
+`issues`, `pull_requests`. The `git` and `labels` toolsets must be enabled
+explicitly (`GITHUB_TOOLSETS=default,git,labels`) or with `all`.
 
-Planned: `repos`, `git` (API-based push via `push_files`), `issues`, `labels`,
-`pull_requests`, `actions`, `notifications`, `gists`, `discussions`,
-`stargazers`, `orgs`, `code_security`, `secret_protection`, `dependabot`,
+| Toolset | Tools |
+|---|---|
+| context | `get_me` |
+| users | `get_user`, `search_users` |
+| repos | `get_repository`, `search_repositories`, `get_file_contents`, `create_or_update_file`, `delete_file` |
+| git | `list_branches`, `create_branch`, `list_commits`, `get_commit`, `get_blob`, `get_tree`, `push_files` |
+| issues | `list_issues`, `get_issue`, `create_issue`, `update_issue`, `add_issue_comment`, `list_issue_comments` |
+| labels | `list_labels`, `get_label`, `create_label`, `update_label`, `delete_label`, `add_issue_labels`, `remove_issue_label` |
+| pull_requests | `list_pull_requests`, `get_pull_request`, `create_pull_request`, `update_pull_request`, `merge_pull_request`, `get_pull_request_files`, `get_pull_request_reviews`, `add_pull_request_comment`, `get_pull_request_status` |
+
+`push_files` performs API-based multi-file commits (blob → tree → commit →
+ref update), so no git credentials are ever needed in the container.
+
+Planned: `actions`, `notifications`, `gists`, `discussions`, `stargazers`,
+`orgs`, `code_security`, `secret_protection`, `dependabot`,
 `security_advisories`, `projects`.
 
 ## Development

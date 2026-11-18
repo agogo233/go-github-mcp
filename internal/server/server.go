@@ -32,14 +32,41 @@ type Registrar struct {
 	cfg *config.Config
 }
 
+// knownToolsets lists every toolset name the server can register, plus the
+// special selectors "all" and "default".
+var knownToolsets = map[string]bool{
+	"all":           true,
+	"default":       true,
+	"context":       true,
+	"users":         true,
+	"repos":         true,
+	"git":           true,
+	"issues":        true,
+	"labels":        true,
+	"pull_requests": true,
+}
+
 // New builds the MCP server with every configured tool registered.
 func New(cfg *config.Config, client *github.Client, version string) *mcpserver.MCPServer {
+	for _, t := range cfg.Toolsets {
+		if !knownToolsets[t] {
+			slog.Warn("unknown toolset in GITHUB_TOOLSETS; it will be ignored",
+				"toolset", t, "known", "all, default, context, users, repos, git, issues, labels, pull_requests")
+		}
+	}
+
 	s := mcpserver.NewMCPServer(serverName, version, mcpserver.WithRecovery())
 	r := &Registrar{s: s, cfg: cfg}
 
 	tools.RegisterContext(r, client)
-	// Future toolsets (repos, issues, pull_requests, users, ...) are
-	// registered here in later milestones.
+	tools.RegisterUsers(r, client)
+	tools.RegisterRepos(r, client)
+	tools.RegisterGit(r, client)
+	tools.RegisterIssues(r, client)
+	tools.RegisterLabels(r, client)
+	tools.RegisterPullRequests(r, client)
+	// Later milestones: actions, notifications, gists, discussions, orgs,
+	// security toolsets and projects.
 
 	return s
 }

@@ -4,8 +4,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 
 	"github.com/google/go-github/v72/github"
 	mcp "github.com/mark3labs/mcp-go/mcp"
@@ -31,12 +29,8 @@ func RegisterContext(r Registrar, client *github.Client) {
 	r.Add("context", false, getMe, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		user, _, err := client.Users.Get(ctx, "")
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to get authenticated user: %v", err)), nil
+			return errResult("get authenticated user", err)
 		}
-		data, err := json.Marshal(user)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("failed to encode user: %v", err)), nil
-		}
-		return mcp.NewToolResultText(string(data)), nil
+		return jsonResult(user)
 	})
 }
