@@ -44,6 +44,12 @@ var knownToolsets = map[string]bool{
 	"issues":        true,
 	"labels":        true,
 	"pull_requests": true,
+	"actions":       true,
+	"notifications": true,
+	"gists":         true,
+	"discussions":   true,
+	"stargazers":    true,
+	"orgs":          true,
 }
 
 // New builds the MCP server with every configured tool registered.
@@ -51,7 +57,8 @@ func New(cfg *config.Config, client *github.Client, version string) *mcpserver.M
 	for _, t := range cfg.Toolsets {
 		if !knownToolsets[t] {
 			slog.Warn("unknown toolset in GITHUB_TOOLSETS; it will be ignored",
-				"toolset", t, "known", "all, default, context, users, repos, git, issues, labels, pull_requests")
+				"toolset", t,
+				"known", "all, default, context, users, repos, git, issues, labels, pull_requests, actions, notifications, gists, discussions, stargazers, orgs")
 		}
 	}
 
@@ -65,8 +72,14 @@ func New(cfg *config.Config, client *github.Client, version string) *mcpserver.M
 	tools.RegisterIssues(r, client)
 	tools.RegisterLabels(r, client)
 	tools.RegisterPullRequests(r, client)
-	// Later milestones: actions, notifications, gists, discussions, orgs,
-	// security toolsets and projects.
+	tools.RegisterActions(r, client)
+	tools.RegisterNotifications(r, client)
+	tools.RegisterGists(r, client)
+	tools.RegisterDiscussions(r, client)
+	tools.RegisterStargazers(r, client)
+	tools.RegisterOrgs(r, client)
+	// Later milestones: security toolsets (code_security, secret_protection,
+	// dependabot, security_advisories) and projects.
 
 	return s
 }

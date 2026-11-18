@@ -8,11 +8,11 @@ It lets MCP clients (Claude, VS Code, Cursor, OpenCode, custom agents, ...)
 operate on GitHub through the REST/GraphQL APIs while the **personal access
 token (PAT) never leaves the server container**.
 
-> Status: M2 — `stdio` + Streamable `HTTP` transports, config hardening,
-> toolset/read-only policy framework, and 37 tools across the `context`,
-> `users`, `repos`, `git`, `issues`, `labels` and `pull_requests` toolsets.
-> More toolsets (actions, notifications, gists, discussions, security, ...)
-> land in upcoming milestones.
+> Status: M3 — `stdio` + Streamable `HTTP` transports, config hardening,
+> toolset/read-only policy framework, and 63 tools across 13 toolsets
+> (context, users, repos, git, issues, labels, pull_requests, actions,
+> notifications, gists, discussions, stargazers, orgs). Remaining:
+> security toolsets and projects.
 
 ## Why
 
@@ -104,11 +104,11 @@ MCP_TRANSPORT=http AUTH_TOKEN=s3cret ./bin/go-github-mcp   # http transport
 }
 ```
 
-## Tools (M2)
+## Tools (M3)
 
 Enabled by default (`GITHUB_TOOLSETS=default`): `context`, `users`, `repos`,
-`issues`, `pull_requests`. The `git` and `labels` toolsets must be enabled
-explicitly (`GITHUB_TOOLSETS=default,git,labels`) or with `all`.
+`issues`, `pull_requests`. All other toolsets must be enabled explicitly,
+e.g. `GITHUB_TOOLSETS=default,git,labels,actions` or `GITHUB_TOOLSETS=all`.
 
 | Toolset | Tools |
 |---|---|
@@ -119,12 +119,17 @@ explicitly (`GITHUB_TOOLSETS=default,git,labels`) or with `all`.
 | issues | `list_issues`, `get_issue`, `create_issue`, `update_issue`, `add_issue_comment`, `list_issue_comments` |
 | labels | `list_labels`, `get_label`, `create_label`, `update_label`, `delete_label`, `add_issue_labels`, `remove_issue_label` |
 | pull_requests | `list_pull_requests`, `get_pull_request`, `create_pull_request`, `update_pull_request`, `merge_pull_request`, `get_pull_request_files`, `get_pull_request_reviews`, `add_pull_request_comment`, `get_pull_request_status` |
+| actions | `list_workflows`, `get_workflow`, `list_workflow_runs`, `get_workflow_run`, `list_workflow_jobs`, `get_workflow_run_logs`, `rerun_workflow`, `cancel_workflow_run` |
+| notifications | `list_notifications`, `get_notification_thread`, `mark_thread_read` |
+| gists | `list_gists`, `get_gist`, `create_gist`, `update_gist`, `delete_gist` |
+| discussions | `list_discussions`, `get_discussion`, `create_discussion`, `list_discussion_comments` |
+| stargazers | `list_stargazers`, `list_starred_repos` |
+| orgs | `get_organization`, `list_org_members`, `list_org_teams`, `list_org_repositories` |
 
 `push_files` performs API-based multi-file commits (blob → tree → commit →
 ref update), so no git credentials are ever needed in the container.
 
-Planned: `actions`, `notifications`, `gists`, `discussions`, `stargazers`,
-`orgs`, `code_security`, `secret_protection`, `dependabot`,
+Planned: `code_security`, `secret_protection`, `dependabot`,
 `security_advisories`, `projects`.
 
 ## Development
