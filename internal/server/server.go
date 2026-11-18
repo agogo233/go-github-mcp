@@ -35,21 +35,26 @@ type Registrar struct {
 // knownToolsets lists every toolset name the server can register, plus the
 // special selectors "all" and "default".
 var knownToolsets = map[string]bool{
-	"all":           true,
-	"default":       true,
-	"context":       true,
-	"users":         true,
-	"repos":         true,
-	"git":           true,
-	"issues":        true,
-	"labels":        true,
-	"pull_requests": true,
-	"actions":       true,
-	"notifications": true,
-	"gists":         true,
-	"discussions":   true,
-	"stargazers":    true,
-	"orgs":          true,
+	"all":                 true,
+	"default":             true,
+	"context":             true,
+	"users":               true,
+	"repos":               true,
+	"git":                 true,
+	"issues":              true,
+	"labels":              true,
+	"pull_requests":       true,
+	"actions":             true,
+	"notifications":       true,
+	"gists":               true,
+	"discussions":         true,
+	"stargazers":          true,
+	"orgs":                true,
+	"code_security":       true,
+	"secret_protection":   true,
+	"dependabot":          true,
+	"security_advisories": true,
+	"projects":            true,
 }
 
 // New builds the MCP server with every configured tool registered.
@@ -58,7 +63,7 @@ func New(cfg *config.Config, client *github.Client, version string) *mcpserver.M
 		if !knownToolsets[t] {
 			slog.Warn("unknown toolset in GITHUB_TOOLSETS; it will be ignored",
 				"toolset", t,
-				"known", "all, default, context, users, repos, git, issues, labels, pull_requests, actions, notifications, gists, discussions, stargazers, orgs")
+				"known", "all, default, context, users, repos, git, issues, labels, pull_requests, actions, notifications, gists, discussions, stargazers, orgs, code_security, secret_protection, dependabot, security_advisories, projects")
 		}
 	}
 
@@ -78,8 +83,11 @@ func New(cfg *config.Config, client *github.Client, version string) *mcpserver.M
 	tools.RegisterDiscussions(r, client)
 	tools.RegisterStargazers(r, client)
 	tools.RegisterOrgs(r, client)
-	// Later milestones: security toolsets (code_security, secret_protection,
-	// dependabot, security_advisories) and projects.
+	tools.RegisterCodeSecurity(r, client)
+	tools.RegisterSecretProtection(r, client)
+	tools.RegisterDependabot(r, client)
+	tools.RegisterSecurityAdvisories(r, client)
+	tools.RegisterProjects(r, client)
 
 	return s
 }

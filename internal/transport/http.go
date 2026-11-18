@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
 	"log/slog"
@@ -33,8 +34,11 @@ func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config) er
 	var protected http.Handler = mcpMux
 	if cfg.AuthToken != "" {
 		protected = bearerAuth(mcpMux, cfg.AuthToken)
-	} else {
+	} else if isLoopbackAddr(cfg.HTTPAddr) {
 		slog.Warn("HTTP authentication disabled via ALLOW_UNAUTHENTICATED; do not expose beyond loopback")
+	} else {
+		slog.Error("HTTP authentication disabled via ALLOW_UNAUTHENTICATED while binding a non-loopback address; "+
+			"the GitHub token is exposed to anyone who can reach this port", "addr", cfg.HTTPAddr)
 	}
 
 	mux := http.NewServeMux()
@@ -75,10 +79,13 @@ func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config) er
 
 // bearerAuth enforces "Authorization: Bearer <shared secret>" on every request.
 func bearerAuth(next http.Handler, token string) http.Handler {
-	want := []byte(token)
+	// Compare SHA-256 digests instead of raw bytes: ConstantTimeCompare
+	// returns early on length mismatch, which would leak the secret length.
+	want := sha256.Sum256([]byte(token))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got := bearerToken(r)
-		if got == nil || subtle.ConstantTimeCompare(got, want) != 1 {
+		gotDigest := sha256.Sum256(got)
+		if got == nil || subtle.ConstantTimeCompare(gotDigest[:], want[:]) != 1 {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="go-github-mcp"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -115,7 +122,7 @@ func auditLog(next http.Handler) http.Handler {
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		defer func() {
 			slog.Info("http request",
-				"client", truncate(orUnknown(r.Header.Get("X-Client-Name")), 128),
+				"client", sanitizeLogField(orUnknown(r.Header.Get("X-Client-Name")), 128),
 				"method", r.Method,
 				"path", r.URL.Path,
 				"status", sw.status,
@@ -127,11 +134,15 @@ func auditLog(next http.Handler) http.Handler {
 	})
 }
 
-// statusWriter captures the response status code for audit logging.
+// statusWriter captures the response status code for audit logging. It must
+// stay transparent to http.Flusher (and other optional interfaces via Unwrap)
+// or the Streamable HTTP transport loses its SSE streaming ability.
 type statusWriter struct {
 	http.ResponseWriter
 	status int
 }
+
+var _ http.Flusher = (*statusWriter)(nil)
 
 func (w *statusWriter) WriteHeader(code int) {
 	w.status = code
@@ -142,6 +153,33 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap lets http.ResponseController see through this wrapper for deadline
+// and flush handling on the underlying connection writer.
+func (w *statusWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+// sanitizeLogField strips control characters (notably newlines) so a hostile
+// X-Client-Name cannot forge audit log lines, then truncates to n bytes.
+func sanitizeLogField(v string, n int) string {
+	clean := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, v)
+	if len(clean) <= n {
+		return clean
+	}
+	return clean[:n]
+}
+
 func orUnknown(v string) string {
 	if strings.TrimSpace(v) == "" {
 		return "unknown"
@@ -149,11 +187,19 @@ func orUnknown(v string) string {
 	return v
 }
 
-func truncate(v string, n int) string {
-	if len(v) <= n {
-		return v
+// isLoopbackAddr reports whether the listen address binds only to a loopback
+// interface (used to escalate the warning when auth is disabled).
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
 	}
-	return v[:n]
+	host = strings.Trim(host, "[]")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func remoteIP(r *http.Request) string {

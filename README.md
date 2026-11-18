@@ -8,11 +8,11 @@ It lets MCP clients (Claude, VS Code, Cursor, OpenCode, custom agents, ...)
 operate on GitHub through the REST/GraphQL APIs while the **personal access
 token (PAT) never leaves the server container**.
 
-> Status: M3 — `stdio` + Streamable `HTTP` transports, config hardening,
-> toolset/read-only policy framework, and 63 tools across 13 toolsets
+> Status: M4 — `stdio` + Streamable `HTTP` transports, config hardening,
+> toolset/read-only policy framework, and 77 tools across 18 toolsets
 > (context, users, repos, git, issues, labels, pull_requests, actions,
-> notifications, gists, discussions, stargazers, orgs). Remaining:
-> security toolsets and projects.
+> notifications, gists, discussions, stargazers, orgs, code_security,
+> secret_protection, dependabot, security_advisories, projects).
 
 ## Why
 
@@ -104,7 +104,7 @@ MCP_TRANSPORT=http AUTH_TOKEN=s3cret ./bin/go-github-mcp   # http transport
 }
 ```
 
-## Tools (M3)
+## Tools (M4)
 
 Enabled by default (`GITHUB_TOOLSETS=default`): `context`, `users`, `repos`,
 `issues`, `pull_requests`. All other toolsets must be enabled explicitly,
@@ -125,12 +125,14 @@ e.g. `GITHUB_TOOLSETS=default,git,labels,actions` or `GITHUB_TOOLSETS=all`.
 | discussions | `list_discussions`, `get_discussion`, `create_discussion`, `list_discussion_comments` |
 | stargazers | `list_stargazers`, `list_starred_repos` |
 | orgs | `get_organization`, `list_org_members`, `list_org_teams`, `list_org_repositories` |
+| code_security | `list_code_scanning_alerts`, `get_code_scanning_alert`, `update_code_scanning_alert` |
+| secret_protection | `list_secret_scanning_alerts`, `get_secret_scanning_alert`, `list_secret_scanning_locations`, `update_secret_scanning_alert` |
+| dependabot | `list_dependabot_alerts`, `get_dependabot_alert`, `update_dependabot_alert` |
+| security_advisories | `list_repository_security_advisories`, `get_security_advisory` |
+| projects | `list_projects`, `list_project_items` (Projects v2 via GraphQL; github.com) |
 
 `push_files` performs API-based multi-file commits (blob → tree → commit →
 ref update), so no git credentials are ever needed in the container.
-
-Planned: `code_security`, `secret_protection`, `dependabot`,
-`security_advisories`, `projects`.
 
 ## Development
 

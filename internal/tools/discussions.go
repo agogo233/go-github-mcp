@@ -42,8 +42,16 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 			return errResult("list discussions", err)
 		}
 		page, perPage := pagination(req)
+		// Whitelist state before interpolating into the query string so a
+		// hostile value cannot inject extra query parameters.
+		state := req.GetString("state", "all")
+		switch state {
+		case "open", "closed", "all":
+		default:
+			return errResult("list discussions", fmt.Errorf("invalid state %q (use open, closed or all)", state))
+		}
 		path := fmt.Sprintf("repos/%s/discussions?state=%s&page=%d&per_page=%d",
-			repoPath(owner, repo), req.GetString("state", "all"), page, perPage)
+			repoPath(owner, repo), state, page, perPage)
 		var out any
 		if err := restCall(ctx, client, "GET", path, nil, &out); err != nil {
 			return errResult("list discussions", err)
