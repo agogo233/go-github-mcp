@@ -8,13 +8,13 @@ import (
 )
 
 // int64Arg reads a required int64 argument (workflow/run/job IDs).
-func int64Arg(req mcp.CallToolRequest, key, action string) (int64, *mcp.CallToolResult, error) {
+func int64Arg(req mcp.CallToolRequest, key, action string) (int64, *mcp.CallToolResult) {
 	v, err := req.RequireInt(key)
 	if err != nil {
 		res, _ := errResult(action, err)
-		return 0, res, nil
+		return 0, res
 	}
-	return int64(v), nil, nil
+	return int64(v), nil
 }
 
 // RegisterActions registers the "actions" toolset (GitHub Actions CI/CD).
@@ -49,7 +49,7 @@ func RegisterActions(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("get workflow", err)
 		}
-		workflowID, errRes, err := int64Arg(req, "workflow_id", "get workflow")
+		workflowID, errRes := int64Arg(req, "workflow_id", "get workflow")
 		if errRes != nil {
 			return errRes, nil
 		}
@@ -108,7 +108,7 @@ func RegisterActions(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("get workflow run", err)
 		}
-		runID, errRes, err := int64Arg(req, "run_id", "get workflow run")
+		runID, errRes := int64Arg(req, "run_id", "get workflow run")
 		if errRes != nil {
 			return errRes, nil
 		}
@@ -132,7 +132,7 @@ func RegisterActions(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("list workflow jobs", err)
 		}
-		runID, errRes, err := int64Arg(req, "run_id", "list workflow jobs")
+		runID, errRes := int64Arg(req, "run_id", "list workflow jobs")
 		if errRes != nil {
 			return errRes, nil
 		}
@@ -156,7 +156,7 @@ func RegisterActions(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("get workflow run logs", err)
 		}
-		runID, errRes, err := int64Arg(req, "run_id", "get workflow run logs")
+		runID, errRes := int64Arg(req, "run_id", "get workflow run logs")
 		if errRes != nil {
 			return errRes, nil
 		}
@@ -181,7 +181,7 @@ func RegisterActions(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("rerun workflow", err)
 		}
-		runID, errRes, err := int64Arg(req, "run_id", "rerun workflow")
+		runID, errRes := int64Arg(req, "run_id", "rerun workflow")
 		if errRes != nil {
 			return errRes, nil
 		}
@@ -202,7 +202,7 @@ func RegisterActions(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("cancel workflow run", err)
 		}
-		runID, errRes, err := int64Arg(req, "run_id", "cancel workflow run")
+		runID, errRes := int64Arg(req, "run_id", "cancel workflow run")
 		if errRes != nil {
 			return errRes, nil
 		}
