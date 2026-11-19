@@ -70,6 +70,58 @@ curl http://127.0.0.1:8080/healthz   # -> ok
 MCP endpoint: `http://<host>:8080/mcp` (Streamable HTTP).
 For LAN/team use, terminate TLS with a reverse proxy (nginx/Caddy) in front.
 
+## Run multiple identities
+
+The server is single-tenant: one container backs exactly one GitHub account.
+To operate several identities (e.g. your personal account plus a bot), run one
+container per identity with its own PAT via `docker-compose.multi.yml`.
+
+```bash
+# main identity (listens on 127.0.0.1:8080)
+cat > .env <<'EOF'
+GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_main_xxx
+AUTH_TOKEN=change-me-shared-secret
+EOF
+
+# second identity (listens on 127.0.0.1:18081); a different PAT and a
+# DIFFERENT strong AUTH_TOKEN. Make it read-only with READ_ONLY=true if wanted.
+cat > .env.bot <<'EOF'
+GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_bot_xxx
+AUTH_TOKEN=change-me-another-strong-secret
+# READ_ONLY=true
+EOF
+
+docker compose -f docker-compose.multi.yml up -d
+curl http://127.0.0.1:8080/healthz    # -> ok
+curl http://127.0.0.1:18081/healthz   # -> ok
+```
+
+The plain `docker compose up -d` (single-identity) stack is unaffected; use
+`-f docker-compose.multi.yml` when you want both identities side by side.
+Each identity needs its own PAT — one PAT cannot be split across containers.
+
+**How clients tell the identities apart.** MCP itself has no identity field,
+so distinction happens in the client config: one `mcpServers` entry per
+identity, with its own name, port and Bearer token. Tools are namespaced by
+entry name (`mcp__github-personal__get_me` vs `mcp__github-bot__get_me`), so
+the agent picks the identity by name. After connecting, call `get_me` on each
+server once — it reports the authenticated account backing that instance.
+
+```json
+{
+  "mcpServers": {
+    "github-personal": {
+      "url": "http://your-server:8080/mcp",
+      "headers": { "Authorization": "Bearer <AUTH_TOKEN_1>" }
+    },
+    "github-bot": {
+      "url": "http://your-server:18081/mcp",
+      "headers": { "Authorization": "Bearer <AUTH_TOKEN_2>" }
+    }
+  }
+}
+```
+
 ## Run locally (stdio, e.g. for IDE integrations)
 
 ```bash

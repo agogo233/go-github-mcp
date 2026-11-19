@@ -1,0 +1,36 @@
+# Multi-identity stack: one container per GitHub identity.
+# Usage: docker compose -f docker-compose.multi.yml up -d
+# Each service reads its own env file (.env / .env.bot) with a distinct
+# GITHUB_PERSONAL_ACCESS_TOKEN and AUTH_TOKEN. Env files hold secrets and are
+# not committed (.gitignore covers .env / .env.*).
+x-github-mcp: &github-mcp
+  build: .
+  # image: ghcr.io/agogo233/go-github-mcp:latest
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  environment:
+    MCP_TRANSPORT: http
+  healthcheck:
+    test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 5s
+
+services:
+  go-github-mcp:
+    <<: *github-mcp
+    ports:
+      # Loopback by default; put a TLS reverse proxy in front for LAN/team use.
+      - "127.0.0.1:8080:8080"
+    env_file:
+      - .env
+  go-github-mcp-bot:
+    <<: *github-mcp
+    ports:
+      - "127.0.0.1:18081:8080"
+    env_file:
+      - .env.bot
