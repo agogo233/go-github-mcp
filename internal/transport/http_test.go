@@ -179,3 +179,61 @@ func TestAuditLogOmitsToolNameForNonToolCalls(t *testing.T) {
 		t.Errorf("initialize must not be logged as a tool call, got: %s", buf.String())
 	}
 }
+
+// A tools/call whose params fall beyond the 64 KiB probe window must still
+// have its full body forwarded to the transport; only the tool-name field is
+// skipped. This guards the memory-amplification fix: the audit middleware
+// must never buffer the whole (up to 10 MiB) body just for a log field.
+func TestAuditLogLargeBodyPreservesBodyAndSkipsDistantToolName(t *testing.T) {
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	pad := strings.Repeat("x", 2*toolNameProbeLimit)
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","pad":"` + pad +
+		`","params":{"name":"delete_file","arguments":{}}}`
+	var gotLen int
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got, _ := io.ReadAll(r.Body)
+		gotLen = len(got)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	auditLog(next).ServeHTTP(httptest.NewRecorder(), req)
+
+	if gotLen != len(body) {
+		t.Errorf("downstream body length = %d, want %d (body must be preserved)", gotLen, len(body))
+	}
+	if strings.Contains(buf.String(), "tool=") {
+		t.Errorf("tool name beyond the probe window must be skipped, got: %s", buf.String())
+	}
+}
+
+// A tools/call larger than the probe window whose tool name sits inside the
+// first 64 KiB must still be attributed in the audit log, with the body
+// forwarded intact.
+func TestAuditLogRecordsToolNameInsideProbeWindowOfLargeBody(t *testing.T) {
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	pad := strings.Repeat("x", 2*toolNameProbeLimit)
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"push_files","arguments":{"pad":"` + pad + `"}}}`
+	var gotLen int
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got, _ := io.ReadAll(r.Body)
+		gotLen = len(got)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	auditLog(next).ServeHTTP(httptest.NewRecorder(), req)
+
+	if gotLen != len(body) {
+		t.Errorf("downstream body length = %d, want %d", gotLen, len(body))
+	}
+	if !strings.Contains(buf.String(), "tool=push_files") {
+		t.Errorf("audit log missing tool name within probe window, got: %s", buf.String())
+	}
+}
