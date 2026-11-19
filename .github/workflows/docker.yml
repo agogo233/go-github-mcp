@@ -46,6 +46,7 @@ jobs:
         with:
           context: .
           push: true
+          provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -77,5 +78,5 @@ jobs:
         with:
           package-name: go-github-mcp
           package-type: container
-          min-versions-to-keep: 0
+          min-versions-to-keep: 3
           delete-only-untagged-versions: true
