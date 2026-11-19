@@ -59,6 +59,20 @@ func TestNewGheComAlreadyApiHost(t *testing.T) {
 	}
 }
 
+// An explicit github.com host must use the default client; WithEnterpriseURLs
+// would wrongly append "/api/v3/" to it.
+func TestNewExplicitGithubCom(t *testing.T) {
+	for _, host := range []string{"github.com", "https://github.com", "www.github.com", "api.github.com", "GitHub.com", "API.GitHub.COM"} {
+		c, err := New(&config.Config{GitHubToken: "t", GitHubHost: host})
+		if err != nil {
+			t.Fatalf("host %q: unexpected error: %v", host, err)
+		}
+		if got := c.BaseURL.String(); got != "https://api.github.com/" {
+			t.Errorf("host %q: BaseURL = %q, want https://api.github.com/", host, got)
+		}
+	}
+}
+
 // flakyRT fails the first N GET calls with a 500, then succeeds.
 type flakyRT struct{ remaining int }
 

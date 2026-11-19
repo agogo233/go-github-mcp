@@ -35,6 +35,13 @@ func New(cfg *config.Config) (*github.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid GITHUB_HOST %q: %w", cfg.GitHubHost, err)
 	}
+	// github.com and its API host must use the default client: go-github's
+	// WithEnterpriseURLs would append "/api/v3/" to them, which is not a valid
+	// REST endpoint.
+	switch strings.ToLower(base.Hostname()) {
+	case "github.com", "www.github.com", "api.github.com":
+		return github.NewClient(httpClient).WithAuthToken(cfg.GitHubToken), nil
+	}
 	upload, err := url.Parse(host + "/api/uploads/")
 	if err != nil {
 		return nil, fmt.Errorf("invalid GITHUB_HOST upload URL: %w", err)
