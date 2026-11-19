@@ -197,13 +197,15 @@ func int64FromArg(req mcp.CallToolRequest, key string) (int64, bool) {
 	case int:
 		return int64(n), true
 	case float64:
-		if n != math.Trunc(n) || n < 0 || n > math.MaxInt64 {
+		// 2^63 is exactly representable as a float64; values at or above it
+		// would overflow int64 on conversion.
+		if n != math.Trunc(n) || n < 0 || n >= float64(1<<63) {
 			return 0, false
 		}
 		return int64(n), true
 	case string:
 		id, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64)
-		if err != nil {
+		if err != nil || id < 0 {
 			return 0, false
 		}
 		return id, true

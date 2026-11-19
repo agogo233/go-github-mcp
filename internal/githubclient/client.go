@@ -94,6 +94,9 @@ func verifyHint(err error) string {
 // retryTransport retries idempotent GET requests a limited number of times on
 // transient failures (connection errors, 5xx) with exponential backoff.
 // Non-GET requests are never retried to avoid duplicate side effects.
+// go-github's GET requests carry no body, so re-issuing the same request on
+// retry is safe; if a GET with a body is ever introduced, rebuild it via
+// req.GetBody before each retry.
 type retryTransport struct {
 	base http.RoundTripper
 }

@@ -35,9 +35,11 @@ func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config) er
 	mcpMux := http.NewServeMux()
 	mcpMux.Handle(endpointPath, mcpHTTP)
 
-	var protected http.Handler = mcpMux
+	var protected http.Handler = auditLog(mcpMux)
 	if cfg.AuthToken != "" {
-		protected = bearerAuth(mcpMux, cfg.AuthToken)
+		// Auth wraps audit so unauthenticated requests are rejected before
+		// their body is buffered for tool-name extraction.
+		protected = bearerAuth(auditLog(mcpMux), cfg.AuthToken)
 	} else if isLoopbackAddr(cfg.HTTPAddr) {
 		slog.Warn("HTTP authentication disabled via ALLOW_UNAUTHENTICATED; do not expose beyond loopback")
 	} else {
@@ -52,7 +54,9 @@ func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config) er
 	})
 	mux.Handle(endpointPath, protected)
 
-	handler := limitBody(auditLog(mux), maxBodyBytes)
+	// /mcp requests are audited inside the auth wrapper above; healthz needs
+	// no audit record.
+	handler := limitBody(mux, maxBodyBytes)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -152,8 +156,14 @@ func auditLog(next http.Handler) http.Handler {
 // mcpToolName extracts the invoked tool name from a tools/call JSON-RPC body
 // so audit logs show which tool was invoked, not just that /mcp was hit. The
 // body is re-wrapped for the next handler; its contents are never logged.
+// Bodies with a known size above the request limit are left untouched so the
+// outer limit middleware keeps answering 413; chunked bodies above the limit
+// end up as a JSON parse error downstream instead.
 func mcpToolName(r *http.Request) string {
 	if r.Method != http.MethodPost || r.URL.Path != endpointPath || r.Body == nil {
+		return ""
+	}
+	if r.ContentLength > maxBodyBytes {
 		return ""
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))

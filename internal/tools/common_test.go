@@ -83,6 +83,12 @@ func TestInt64Arg(t *testing.T) {
 	if _, res := int64Arg(reqWithArgs(map[string]any{"id": float64(-1)}), "id", "fetch widget"); res == nil {
 		t.Error("expected error result when argument is negative")
 	}
+	if _, res := int64Arg(reqWithArgs(map[string]any{"id": float64(1 << 63)}), "id", "fetch widget"); res == nil {
+		t.Error("expected error result when argument overflows int64 (2^63)")
+	}
+	if _, res := int64Arg(reqWithArgs(map[string]any{"id": "-3"}), "id", "fetch widget"); res == nil {
+		t.Error("expected error result when numeric string is negative")
+	}
 
 	// Workflow run IDs already exceed 2^31; they must survive unchanged.
 	const bigID = 5_000_000_000

@@ -12,13 +12,12 @@ import (
 // Discussions are not covered by go-github's typed services yet, so these
 // tools call the REST endpoints directly through the shared client (which
 // keeps GHES base-URL handling and authentication identical).
-func restCall(ctx context.Context, client *github.Client, method, path string, body, out any) error {
+func restCall(ctx context.Context, client *github.Client, method, path string, body, out any) (*github.Response, error) {
 	req, err := client.NewRequest(method, path, body)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = client.Do(ctx, req, out)
-	return err
+	return client.Do(ctx, req, out)
 }
 
 // repoPath escapes owner/repo before building a raw REST path.
@@ -51,10 +50,11 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 		path := fmt.Sprintf("repos/%s/discussions?state=%s&page=%d&per_page=%d",
 			repoPath(owner, repo), state, page, perPage)
 		var out any
-		if err := restCall(ctx, client, "GET", path, nil, &out); err != nil {
+		resp, err := restCall(ctx, client, "GET", path, nil, &out)
+		if err != nil {
 			return errResult("list discussions", err)
 		}
-		return jsonResult(out)
+		return jsonResultWithPage(resp, out)
 	})
 
 	getDiscussion := mcp.NewTool("get_discussion",
@@ -73,7 +73,7 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 		}
 		var out any
 		path := fmt.Sprintf("repos/%s/discussions/%d", repoPath(owner, repo), number)
-		if err := restCall(ctx, client, "GET", path, nil, &out); err != nil {
+		if _, err := restCall(ctx, client, "GET", path, nil, &out); err != nil {
 			return errResult("get discussion", err)
 		}
 		return jsonResult(out)
@@ -110,7 +110,7 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 		}
 		var out any
 		path := fmt.Sprintf("repos/%s/discussions", repoPath(owner, repo))
-		if err := restCall(ctx, client, "POST", path, payload, &out); err != nil {
+		if _, err := restCall(ctx, client, "POST", path, payload, &out); err != nil {
 			return errResult("create discussion", err)
 		}
 		return jsonResult(out)
@@ -135,9 +135,10 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 		path := fmt.Sprintf("repos/%s/discussions/%d/comments?page=%d&per_page=%d",
 			repoPath(owner, repo), number, page, perPage)
 		var out any
-		if err := restCall(ctx, client, "GET", path, nil, &out); err != nil {
+		resp, err := restCall(ctx, client, "GET", path, nil, &out)
+		if err != nil {
 			return errResult("list discussion comments", err)
 		}
-		return jsonResult(out)
+		return jsonResultWithPage(resp, out)
 	})
 }
