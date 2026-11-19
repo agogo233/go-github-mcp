@@ -224,6 +224,18 @@ func isEmptyArg(v any) bool {
 	return ok && strings.TrimSpace(s) == ""
 }
 
+// validState reports whether v is one of the allowed state values. Toolsets
+// use it to reject invalid filters early with a message that names the
+// accepted values instead of relaying a less specific API error later.
+func validState(v string, allowed ...string) bool {
+	for _, a := range allowed {
+		if v == a {
+			return true
+		}
+	}
+	return false
+}
+
 // withRepoArgs declares the standard owner/repo argument pair.
 func withRepoArgs() mcp.ToolOption {
 	return func(t *mcp.Tool) {

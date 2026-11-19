@@ -388,12 +388,7 @@ func isLoopbackAddr(addr string) bool {
 	if err != nil {
 		return false
 	}
-	host = strings.Trim(host, "[]")
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return config.IsLoopbackHost(host)
 }
 
 func remoteIP(r *http.Request) string {

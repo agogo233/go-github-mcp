@@ -25,8 +25,12 @@ func RegisterIssues(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("list issues", err)
 		}
+		state := req.GetString("state", "open")
+		if !validState(state, "open", "closed", "all") {
+			return errResult("list issues", fmt.Errorf("invalid state %q (use open, closed or all)", state))
+		}
 		opts := &github.IssueListByRepoOptions{
-			State:       req.GetString("state", "open"),
+			State:       state,
 			Assignee:    req.GetString("assignee", ""),
 			Labels:      splitCommaList(req.GetString("labels", "")),
 			ListOptions: *listOptions(req),
@@ -75,7 +79,11 @@ func RegisterIssues(r Registrar, client *github.Client) {
 			mcp.Description("Label names to apply"),
 			mcp.Items(map[string]any{"type": "string"}),
 		),
-		mcp.WithString("assignee", mcp.Description("Single username to assign")),
+		mcp.WithString("assignee", mcp.Description("Single username to assign (legacy; prefer assignees)")),
+		mcp.WithArray("assignees",
+			mcp.Description("Usernames to assign"),
+			mcp.Items(map[string]any{"type": "string"}),
+		),
 	)
 	r.Add("issues", true, createIssue, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -96,6 +104,9 @@ func RegisterIssues(r Registrar, client *github.Client) {
 		if v := req.GetString("assignee", ""); v != "" {
 			issueReq.Assignee = github.Ptr(v)
 		}
+		if assignees := req.GetStringSlice("assignees", nil); len(assignees) > 0 {
+			issueReq.Assignees = &assignees
+		}
 		issue, _, err := client.Issues.Create(ctx, owner, repo, issueReq)
 		if err != nil {
 			return errResult("create issue", err)
@@ -104,7 +115,7 @@ func RegisterIssues(r Registrar, client *github.Client) {
 	})
 
 	updateIssue := mcp.NewTool("update_issue",
-		mcp.WithDescription("Update an existing issue: title, body, state (open/closed), labels or assignee."),
+		mcp.WithDescription("Update an existing issue: title, body, state (open/closed), labels, assignees or milestone."),
 		withRepoArgs(),
 		mcp.WithNumber("issue_number", mcp.Required(), mcp.Description("Issue number")),
 		mcp.WithString("title", mcp.Description("New title")),
@@ -115,6 +126,11 @@ func RegisterIssues(r Registrar, client *github.Client) {
 			mcp.Description("Replace existing labels with this list"),
 			mcp.Items(map[string]any{"type": "string"}),
 		),
+		mcp.WithArray("assignees",
+			mcp.Description("Replace existing assignees with this list; an empty array clears all assignees"),
+			mcp.Items(map[string]any{"type": "string"}),
+		),
+		mcp.WithNumber("milestone", mcp.Description("Milestone number to set; clearing an existing milestone is not supported by this tool")),
 	)
 	r.Add("issues", true, updateIssue, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -135,9 +151,15 @@ func RegisterIssues(r Registrar, client *github.Client) {
 			}
 		}
 		if v := req.GetString("state", ""); v != "" {
+			if !validState(v, "open", "closed") {
+				return errResult("update issue", fmt.Errorf("invalid state %q (use open or closed)", v))
+			}
 			issueReq.State = github.Ptr(v)
 		}
 		if v := req.GetString("state_reason", ""); v != "" {
+			if !validState(v, "completed", "not_planned", "reopened") {
+				return errResult("update issue", fmt.Errorf("invalid state_reason %q (use completed, not_planned or reopened)", v))
+			}
 			issueReq.StateReason = github.Ptr(v)
 		}
 		if labels, ok := req.GetArguments()["labels"]; ok {
@@ -151,6 +173,26 @@ func RegisterIssues(r Registrar, client *github.Client) {
 				}
 				issueReq.Labels = &ls
 			}
+		}
+		if assignees, ok := req.GetArguments()["assignees"]; ok {
+			// Presence matters: an empty array explicitly clears all assignees.
+			if arr, ok := assignees.([]any); ok {
+				as := make([]string, 0, len(arr))
+				for _, item := range arr {
+					if s, ok := item.(string); ok {
+						as = append(as, s)
+					}
+				}
+				issueReq.Assignees = &as
+			}
+		}
+		if v, ok := req.GetArguments()["milestone"]; ok {
+			f, isNum := v.(float64)
+			if !isNum || f <= 0 || f != float64(int64(f)) {
+				return errResult("update issue", fmt.Errorf("milestone must be a positive milestone number; clearing a milestone is not supported"))
+			}
+			m := int(f)
+			issueReq.Milestone = &m
 		}
 		issue, _, err := client.Issues.Edit(ctx, owner, repo, number, issueReq)
 		if err != nil {
@@ -258,6 +300,26 @@ func RegisterIssues(r Registrar, client *github.Client) {
 			return errResult("update issue comment", err)
 		}
 		return jsonResult(comment)
+	})
+
+	deleteIssueComment := mcp.NewTool("delete_issue_comment",
+		mcp.WithDescription("Delete an issue or pull request comment by ID."),
+		withRepoArgs(),
+		mcp.WithNumber("comment_id", mcp.Required(), mcp.Description("Comment ID (from list_issue_comments)")),
+	)
+	r.Add("issues", true, deleteIssueComment, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		owner, repo, err := ownerRepo(req)
+		if err != nil {
+			return errResult("delete issue comment", err)
+		}
+		commentID, errRes := int64Arg(req, "comment_id", "delete issue comment")
+		if errRes != nil {
+			return errRes, nil
+		}
+		if _, err := client.Issues.DeleteComment(ctx, owner, repo, commentID); err != nil {
+			return errResult("delete issue comment", err)
+		}
+		return jsonResult(map[string]any{"deleted": true, "comment_id": commentID})
 	})
 
 	addSubIssue := mcp.NewTool("add_sub_issue",

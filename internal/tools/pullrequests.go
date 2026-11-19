@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/google/go-github/v72/github"
 	mcp "github.com/mark3labs/mcp-go/mcp"
@@ -22,8 +23,12 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("list pull requests", err)
 		}
+		state := req.GetString("state", "open")
+		if !validState(state, "open", "closed", "all") {
+			return errResult("list pull requests", fmt.Errorf("invalid state %q (use open, closed or all)", state))
+		}
 		opts := &github.PullRequestListOptions{
-			State:       req.GetString("state", "open"),
+			State:       state,
 			Base:        req.GetString("base", ""),
 			Head:        req.GetString("head", ""),
 			ListOptions: *listOptions(req),
@@ -127,6 +132,9 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 			}
 		}
 		if v := req.GetString("state", ""); v != "" {
+			if !validState(v, "open", "closed") {
+				return errResult("update pull request", fmt.Errorf("invalid state %q (use open or closed)", v))
+			}
 			patch.State = github.Ptr(v)
 		}
 		pr, _, err := client.PullRequests.Edit(ctx, owner, repo, number, patch)

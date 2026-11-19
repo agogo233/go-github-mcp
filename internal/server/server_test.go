@@ -111,13 +111,13 @@ func TestToolsetRegistryIsComplete(t *testing.T) {
 }
 
 // The registry is the single source of truth; this pins the documented
-// contract of 18 toolsets registering 99 tools in total.
+// contract of 18 toolsets registering 100 tools in total.
 func TestRegistryRegistersAllTools(t *testing.T) {
 	c := &countingRegistrar{}
 	for _, e := range toolsetRegistry {
 		e.register(c, github.NewClient(nil))
 	}
-	if c.n != 99 {
-		t.Fatalf("registry registered %d tools, want 99", c.n)
+	if c.n != 100 {
+		t.Fatalf("registry registered %d tools, want 100", c.n)
 	}
 }

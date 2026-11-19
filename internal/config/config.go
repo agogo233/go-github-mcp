@@ -58,7 +58,7 @@ func Load() (*Config, error) {
 	if cfg.GitHubToken == "" {
 		return nil, fmt.Errorf("GITHUB_PERSONAL_ACCESS_TOKEN is required")
 	}
-	if cfg.GitHubHost != "" && strings.HasPrefix(cfg.GitHubHost, "http://") && !isLoopbackHost(cfg.GitHubHost) {
+	if cfg.GitHubHost != "" && strings.HasPrefix(cfg.GitHubHost, "http://") && !IsLoopbackHost(cfg.GitHubHost) {
 		return nil, fmt.Errorf("GITHUB_HOST must use https (got %q); plaintext would leak the token", cfg.GitHubHost)
 	}
 
@@ -122,14 +122,25 @@ func parseBool(v string) (bool, error) {
 	}
 }
 
-func isLoopbackHost(host string) bool {
-	h := strings.TrimPrefix(host, "http://")
-	if i := strings.Index(h, "/"); i >= 0 {
+// IsLoopbackHost reports whether host (a bare host, host:port or URL) points
+// at a loopback interface. It relaxes the https requirement for local
+// GitHub Enterprise setups and drives the auth-disabled warning for
+// loopback-only listen addresses.
+func IsLoopbackHost(host string) bool {
+	h := host
+	if i := strings.Index(h, "://"); i >= 0 {
+		h = h[i+3:]
+	}
+	if i := strings.IndexAny(h, "/?#"); i >= 0 {
 		h = h[:i]
 	}
 	if _, _, err := net.SplitHostPort(h); err == nil {
 		h, _, _ = net.SplitHostPort(h)
 	}
 	h = strings.Trim(h, "[]")
-	return h == "localhost" || h == "127.0.0.1" || h == "::1"
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }

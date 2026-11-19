@@ -205,9 +205,11 @@ func RegisterActions(r Registrar, client *github.Client) {
 	})
 
 	getWorkflowRunLogs := mcp.NewTool("get_workflow_run_logs",
-		mcp.WithDescription("Get a short-lived download URL for the logs of a workflow run."),
+		mcp.WithDescription("Get a short-lived download URL for the logs of a workflow run, or the log content itself with return_content."),
 		withRepoArgs(),
 		mcp.WithNumber("run_id", mcp.Required(), mcp.Description("Workflow run ID")),
+		mcp.WithBoolean("return_content", mcp.Description("Fetch the log content inline instead of returning a download URL")),
+		mcp.WithNumber("tail_lines", mcp.Description("With return_content, keep only the last N lines (default: all lines, capped at 10000)")),
 	)
 	r.Add("actions", false, getWorkflowRunLogs, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -222,10 +224,26 @@ func RegisterActions(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("get workflow run logs", err)
 		}
-		return jsonResult(map[string]any{
-			"logs_url":   logsURL.String(),
-			"expires_at": "short-lived; download soon",
-		})
+		if !req.GetBool("return_content", false) {
+			return jsonResult(map[string]any{
+				"run_id":     runID,
+				"logs_url":   logsURL.String(),
+				"expires_at": "short-lived; download soon",
+			})
+		}
+		content, truncated, err := fetchLogContent(ctx, logsURL.String(), req.GetInt("tail_lines", 0))
+		if err != nil {
+			return errResult("get workflow run logs (content)", err)
+		}
+		entry := map[string]any{
+			"run_id":    runID,
+			"content":   content,
+			"truncated": truncated,
+		}
+		if truncated {
+			entry["note"] = "log truncated: exceeded the in-memory size cap"
+		}
+		return jsonResult(entry)
 	})
 
 	rerunWorkflow := mcp.NewTool("rerun_workflow",

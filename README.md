@@ -9,7 +9,7 @@ operate on GitHub through the REST/GraphQL APIs while the **personal access
 token (PAT) never leaves the server container**.
 
 > Status: M4 — `stdio` + Streamable `HTTP` transports, config hardening,
-> toolset/read-only policy framework, and 99 tools across 18 toolsets
+> toolset/read-only policy framework, and 100 tools across 18 toolsets
 > (context, users, repos, git, issues, labels, pull_requests, actions,
 > notifications, gists, discussions, stargazers, orgs, code_security,
 > secret_protection, dependabot, security_advisories, projects).
@@ -171,7 +171,7 @@ e.g. `GITHUB_TOOLSETS=default,git,labels,actions` or `GITHUB_TOOLSETS=all`.
 | users | `get_user`, `search_users` |
 | repos | `get_repository`, `search_repositories`, `search_code`, `search_commits`, `get_file_contents`, `create_or_update_file`, `delete_file`, `list_releases`, `get_latest_release`, `get_release_by_tag`, `list_tags`, `get_tag`, `list_repository_collaborators`, `create_repository`, `delete_repository`, `fork_repository` |
 | git | `list_branches`, `create_branch`, `list_commits`, `get_commit`, `get_blob`, `get_tree`, `push_files` |
-| issues | `list_issues`, `get_issue`, `create_issue`, `update_issue`, `add_issue_comment`, `list_issue_comments`, `update_issue_comment`, `search_issues`, `add_sub_issue`, `remove_sub_issue`, `list_issue_types` |
+| issues | `list_issues`, `get_issue`, `create_issue`, `update_issue`, `add_issue_comment`, `list_issue_comments`, `update_issue_comment`, `delete_issue_comment`, `search_issues`, `add_sub_issue`, `remove_sub_issue`, `list_issue_types` |
 | labels | `list_labels`, `get_label`, `create_label`, `update_label`, `delete_label`, `add_issue_labels`, `remove_issue_label` |
 | pull_requests | `list_pull_requests`, `get_pull_request`, `create_pull_request`, `update_pull_request`, `merge_pull_request`, `get_pull_request_files`, `get_pull_request_reviews`, `add_pull_request_comment`, `get_pull_request_status`, `search_pull_requests` |
 | actions | `list_workflows`, `get_workflow`, `list_workflow_runs`, `get_workflow_run`, `list_workflow_jobs`, `get_workflow_run_logs`, `get_job_logs`, `list_workflow_run_artifacts`, `get_workflow_run_artifact`, `rerun_workflow`, `cancel_workflow_run` |

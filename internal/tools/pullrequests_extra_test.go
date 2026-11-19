@@ -296,3 +296,37 @@ func TestSearchPullRequestsQueryPrefix(t *testing.T) {
 		t.Errorf("unexpected calls: %v", *calls)
 	}
 }
+
+func TestListPullRequestsRejectsInvalidState(t *testing.T) {
+	client, calls := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		return http.StatusOK, `[]`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterPullRequests(r, client)
+
+	text, isErr := callTool(t, r, "list_pull_requests", map[string]any{"owner": "o", "repo": "r", "state": "banana"})
+	if !isErr || !strings.Contains(text, "use open, closed or all") {
+		t.Errorf("expected state validation error, got: %s", text)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("no API call should be made, got: %v", *calls)
+	}
+}
+
+func TestUpdatePullRequestRejectsInvalidState(t *testing.T) {
+	client, calls := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		return http.StatusOK, `{}`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterPullRequests(r, client)
+
+	text, isErr := callTool(t, r, "update_pull_request", map[string]any{
+		"owner": "o", "repo": "r", "pull_number": float64(5), "state": "merged",
+	})
+	if !isErr || !strings.Contains(text, "use open or closed") {
+		t.Errorf("expected state validation error, got: %s", text)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("no API call should be made, got: %v", *calls)
+	}
+}

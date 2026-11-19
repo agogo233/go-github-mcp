@@ -160,3 +160,27 @@ func TestLoadRejectsInvalidReadOnly(t *testing.T) {
 		t.Fatalf("expected READ_ONLY invalid boolean error, got %v", err)
 	}
 }
+
+func TestIsLoopbackHost(t *testing.T) {
+	tests := []struct {
+		host string
+		want bool
+	}{
+		{"localhost", true},
+		{"LOCALHOST", true},
+		{"127.0.0.1", true},
+		{"127.7.7.7", true},
+		{"::1", true},
+		{"http://localhost:8080", true},
+		{"http://127.0.0.1:9000/api/v3/", true},
+		{"example.com", false},
+		{"192.168.1.5", false},
+		{"::2", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := IsLoopbackHost(tt.host); got != tt.want {
+			t.Errorf("IsLoopbackHost(%q) = %v, want %v", tt.host, got, tt.want)
+		}
+	}
+}

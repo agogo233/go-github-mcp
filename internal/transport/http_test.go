@@ -113,6 +113,7 @@ func TestIsLoopbackAddr(t *testing.T) {
 		want bool
 	}{
 		{"127.0.0.1:8080", true},
+		{"127.7.7.7:80", true},
 		{"localhost:8080", true},
 		{"[::1]:8080", true},
 		{"0.0.0.0:8080", false},

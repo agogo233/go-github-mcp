@@ -222,3 +222,52 @@ func TestWorkflowRunArtifacts(t *testing.T) {
 		t.Errorf("expected the artifact download redirect call, calls:\n%s", all)
 	}
 }
+
+func TestGetWorkflowRunLogsURLMode(t *testing.T) {
+	logURL := startLogServer(t, "log")
+	client, calls := newFakeGitHub(t, func(r *http.Request) (int, string, http.Header) {
+		if strings.HasSuffix(r.URL.Path, "/actions/runs/9/logs") {
+			return http.StatusFound, ``, http.Header{"Location": []string{*logURL}}
+		}
+		return 0, "", nil
+	})
+	r := newRecordingRegistrar()
+	RegisterActions(r, client)
+
+	text, isErr := callTool(t, r, "get_workflow_run_logs", map[string]any{"owner": "o", "repo": "r", "run_id": float64(9)})
+	if isErr {
+		t.Fatalf("unexpected error result: %s", text)
+	}
+	if !strings.Contains(text, "logs_url") || strings.Contains(text, `"content"`) {
+		t.Errorf("default mode must return a download URL only, got: %s", text)
+	}
+	if len(*calls) != 1 || !strings.HasSuffix((*calls)[0], "GET /api/v3/repos/o/r/actions/runs/9/logs") {
+		t.Errorf("unexpected calls: %v", *calls)
+	}
+}
+
+func TestGetWorkflowRunLogsContentModeWithTail(t *testing.T) {
+	logURL := startLogServer(t, "a\nb\nc\n")
+	client, calls := newFakeGitHub(t, func(r *http.Request) (int, string, http.Header) {
+		if strings.HasSuffix(r.URL.Path, "/actions/runs/9/logs") {
+			return http.StatusFound, ``, http.Header{"Location": []string{*logURL}}
+		}
+		return 0, "", nil
+	})
+	r := newRecordingRegistrar()
+	RegisterActions(r, client)
+
+	text, isErr := callTool(t, r, "get_workflow_run_logs", map[string]any{
+		"owner": "o", "repo": "r", "run_id": float64(9),
+		"return_content": true, "tail_lines": float64(2),
+	})
+	if isErr {
+		t.Fatalf("unexpected error result: %s", text)
+	}
+	if !strings.Contains(text, `"content":"b\nc"`) || !strings.Contains(text, `"truncated":false`) {
+		t.Errorf("unexpected payload: %s", text)
+	}
+	if len(*calls) != 1 {
+		t.Errorf("unexpected calls: %v", *calls)
+	}
+}
