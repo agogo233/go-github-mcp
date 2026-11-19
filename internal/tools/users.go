@@ -24,8 +24,7 @@ func RegisterUsers(r Registrar, client *github.Client) {
 	searchUsers := mcp.NewTool("search_users",
 		mcp.WithDescription("Search for GitHub users by keyword (login, name, email)."),
 		mcp.WithString("query", mcp.Required(), mcp.Description("Search query, e.g. 'location:china language:go'")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("users", false, searchUsers, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		q, err := req.RequireString("query")

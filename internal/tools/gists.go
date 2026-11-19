@@ -48,8 +48,7 @@ func RegisterGists(r Registrar, client *github.Client) {
 	listGists := mcp.NewTool("list_gists",
 		mcp.WithDescription("List gists of the authenticated user (or a given username)."),
 		mcp.WithString("username", mcp.Description("Username whose gists to list; empty means the authenticated user")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("gists", false, listGists, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		gists, _, err := client.Gists.List(ctx, req.GetString("username", ""), &github.GistListOptions{

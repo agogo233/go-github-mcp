@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/google/go-github/v72/github"
@@ -101,4 +103,102 @@ func pagination(req mcp.CallToolRequest) (page, perPage int) {
 func listOptions(req mcp.CallToolRequest) *github.ListOptions {
 	page, perPage := pagination(req)
 	return &github.ListOptions{Page: page, PerPage: perPage}
+}
+
+// ownerRepo extracts the required owner/repo argument pair.
+func ownerRepo(req mcp.CallToolRequest) (string, string, error) {
+	owner, err := req.RequireString("owner")
+	if err != nil {
+		return "", "", err
+	}
+	repo, err := req.RequireString("repo")
+	if err != nil {
+		return "", "", err
+	}
+	return strings.TrimSpace(owner), strings.TrimSpace(repo), nil
+}
+
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// splitCommaList parses a comma-separated argument into a clean slice.
+func splitCommaList(v string) []string {
+	if v == "" {
+		return nil
+	}
+	var out []string
+	for _, item := range strings.Split(v, ",") {
+		if s := strings.TrimSpace(item); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// strPtrIfSet returns a pointer to v when set, else nil (for optional filters).
+func strPtrIfSet(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return github.Ptr(v)
+}
+
+// int64Arg reads a required int64 argument (workflow/run/job IDs). It inspects
+// the raw argument instead of mcp-go's int helpers so large IDs survive on
+// 32-bit platforms where int is only 32 bits.
+func int64Arg(req mcp.CallToolRequest, key, action string) (int64, *mcp.CallToolResult) {
+	id, ok := int64FromArg(req, key)
+	if !ok {
+		res, _ := errResult(action, fmt.Errorf("argument %q is required and must be an integer ID", key))
+		return 0, res
+	}
+	return id, nil
+}
+
+// int64FromArg extracts an integer ID from a tool argument without
+// platform-dependent narrowing: JSON numbers arrive as float64 and must not
+// pass through int on 32-bit builds. Accepts ints, integral floats, and
+// numeric strings; ok is false when the argument is missing or invalid.
+func int64FromArg(req mcp.CallToolRequest, key string) (int64, bool) {
+	v, ok := req.GetArguments()[key]
+	if !ok {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case int:
+		return int64(n), true
+	case float64:
+		if n != math.Trunc(n) || n < 0 || n > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(n), true
+	case string:
+		id, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return id, true
+	default:
+		return 0, false
+	}
+}
+
+// withRepoArgs declares the standard owner/repo argument pair.
+func withRepoArgs() mcp.ToolOption {
+	return func(t *mcp.Tool) {
+		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner"))(t)
+		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name"))(t)
+	}
+}
+
+// withPagination declares the standard page/per_page arguments.
+func withPagination() mcp.ToolOption {
+	return func(t *mcp.Tool) {
+		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)"))(t)
+		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)"))(t)
+	}
 }

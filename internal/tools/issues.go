@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/google/go-github/v72/github"
@@ -13,14 +12,12 @@ import (
 func RegisterIssues(r Registrar, client *github.Client) {
 	listIssues := mcp.NewTool("list_issues",
 		mcp.WithDescription("List issues of a repository (excludes pull requests)."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("state", mcp.Description("Filter: open, closed, all (default open)")),
 		mcp.WithString("labels", mcp.Description("Comma-separated label names to filter by")),
 		mcp.WithString("assignee", mcp.Description("Filter by assignee, '*' for any, 'none' for unassigned")),
 		mcp.WithString("since", mcp.Description("Only issues updated at or after this ISO 8601 timestamp")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("issues", false, listIssues, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -28,13 +25,10 @@ func RegisterIssues(r Registrar, client *github.Client) {
 			return errResult("list issues", err)
 		}
 		opts := &github.IssueListByRepoOptions{
-			State:    req.GetString("state", "open"),
-			Assignee: req.GetString("assignee", ""),
-			Labels:   splitCommaList(req.GetString("labels", "")),
-			ListOptions: func() github.ListOptions {
-				page, perPage := pagination(req)
-				return github.ListOptions{Page: page, PerPage: perPage}
-			}(),
+			State:       req.GetString("state", "open"),
+			Assignee:    req.GetString("assignee", ""),
+			Labels:      splitCommaList(req.GetString("labels", "")),
+			ListOptions: *listOptions(req),
 		}
 		if v := req.GetString("since", ""); v != "" {
 			t, err := time.Parse(time.RFC3339, v)
@@ -52,8 +46,7 @@ func RegisterIssues(r Registrar, client *github.Client) {
 
 	getIssue := mcp.NewTool("get_issue",
 		mcp.WithDescription("Get a single issue with its metadata."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("issue_number", mcp.Required(), mcp.Description("Issue number")),
 	)
 	r.Add("issues", false, getIssue, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -74,8 +67,7 @@ func RegisterIssues(r Registrar, client *github.Client) {
 
 	createIssue := mcp.NewTool("create_issue",
 		mcp.WithDescription("Create a new issue in a repository."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("title", mcp.Required(), mcp.Description("Issue title")),
 		mcp.WithString("body", mcp.Description("Issue body (markdown supported)")),
 		mcp.WithArray("labels",
@@ -112,8 +104,7 @@ func RegisterIssues(r Registrar, client *github.Client) {
 
 	updateIssue := mcp.NewTool("update_issue",
 		mcp.WithDescription("Update an existing issue: title, body, state (open/closed), labels or assignee."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("issue_number", mcp.Required(), mcp.Description("Issue number")),
 		mcp.WithString("title", mcp.Description("New title")),
 		mcp.WithString("body", mcp.Description("New body; omit or pass null to keep the current body unchanged")),
@@ -169,8 +160,7 @@ func RegisterIssues(r Registrar, client *github.Client) {
 
 	addIssueComment := mcp.NewTool("add_issue_comment",
 		mcp.WithDescription("Add a comment to an issue."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("issue_number", mcp.Required(), mcp.Description("Issue number")),
 		mcp.WithString("body", mcp.Required(), mcp.Description("Comment body (markdown supported)")),
 	)
@@ -196,11 +186,9 @@ func RegisterIssues(r Registrar, client *github.Client) {
 
 	listIssueComments := mcp.NewTool("list_issue_comments",
 		mcp.WithDescription("List comments of an issue in chronological order."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("issue_number", mcp.Required(), mcp.Description("Issue number")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("issues", false, listIssueComments, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -219,18 +207,4 @@ func RegisterIssues(r Registrar, client *github.Client) {
 		}
 		return jsonResult(comments)
 	})
-}
-
-// splitCommaList parses a comma-separated argument into a clean slice.
-func splitCommaList(v string) []string {
-	if v == "" {
-		return nil
-	}
-	var out []string
-	for _, item := range strings.Split(v, ",") {
-		if s := strings.TrimSpace(item); s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
 }

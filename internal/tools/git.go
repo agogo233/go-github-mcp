@@ -14,10 +14,8 @@ import (
 func RegisterGit(r Registrar, client *github.Client) {
 	listBranches := mcp.NewTool("list_branches",
 		mcp.WithDescription("List branches of a repository."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withRepoArgs(),
+		withPagination(),
 	)
 	r.Add("git", false, listBranches, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -35,8 +33,7 @@ func RegisterGit(r Registrar, client *github.Client) {
 
 	createBranch := mcp.NewTool("create_branch",
 		mcp.WithDescription("Create a new branch from an existing branch (or the default branch)."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("branch", mcp.Required(), mcp.Description("Name of the new branch")),
 		mcp.WithString("from_branch", mcp.Description("Source branch; defaults to the repository default branch")),
 	)
@@ -80,12 +77,10 @@ func RegisterGit(r Registrar, client *github.Client) {
 
 	listCommits := mcp.NewTool("list_commits",
 		mcp.WithDescription("List commits of a repository, optionally starting from a branch/tag/SHA."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("sha", mcp.Description("Branch, tag or commit SHA to start from")),
 		mcp.WithString("path", mcp.Description("Only commits touching this file path")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("git", false, listCommits, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -104,8 +99,7 @@ func RegisterGit(r Registrar, client *github.Client) {
 
 	getCommit := mcp.NewTool("get_commit",
 		mcp.WithDescription("Get one commit with its diff stats and files."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("sha", mcp.Required(), mcp.Description("Commit SHA (or branch/tag ref)")),
 	)
 	r.Add("git", false, getCommit, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -126,8 +120,7 @@ func RegisterGit(r Registrar, client *github.Client) {
 
 	getBlob := mcp.NewTool("get_blob",
 		mcp.WithDescription("Get the raw content of a git blob by SHA (works for files of any size)."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("sha", mcp.Required(), mcp.Description("Blob SHA")),
 	)
 	r.Add("git", false, getBlob, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -148,8 +141,7 @@ func RegisterGit(r Registrar, client *github.Client) {
 
 	getTree := mcp.NewTool("get_tree",
 		mcp.WithDescription("Get a git tree (directory structure) by SHA."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("sha", mcp.Required(), mcp.Description("Tree SHA (a commit SHA resolves to its root tree)")),
 		mcp.WithBoolean("recursive", mcp.Description("Include nested trees recursively")),
 	)
@@ -172,8 +164,7 @@ func RegisterGit(r Registrar, client *github.Client) {
 	pushFiles := mcp.NewTool("push_files",
 		mcp.WithDescription("Commit multiple text files to a branch in a single commit via the Git data API "+
 			"(equivalent of editing files then running git commit + git push, without needing git credentials)."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("branch", mcp.Required(), mcp.Description("Target branch; must already exist (create it with create_branch first)")),
 		mcp.WithString("message", mcp.Required(), mcp.Description("Commit message")),
 		mcp.WithArray("files", mcp.Required(),

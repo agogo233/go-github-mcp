@@ -2,63 +2,17 @@ package tools
 
 import (
 	"context"
-	"fmt"
-	"math"
-	"strconv"
-	"strings"
 
 	"github.com/google/go-github/v72/github"
 	mcp "github.com/mark3labs/mcp-go/mcp"
 )
 
-// int64Arg reads a required int64 argument (workflow/run/job IDs). It inspects
-// the raw argument instead of mcp-go's int helpers so large IDs survive on
-// 32-bit platforms where int is only 32 bits.
-func int64Arg(req mcp.CallToolRequest, key, action string) (int64, *mcp.CallToolResult) {
-	id, ok := int64FromArg(req, key)
-	if !ok {
-		res, _ := errResult(action, fmt.Errorf("argument %q is required and must be an integer ID", key))
-		return 0, res
-	}
-	return id, nil
-}
-
-// int64FromArg extracts an integer ID from a tool argument without
-// platform-dependent narrowing: JSON numbers arrive as float64 and must not
-// pass through int on 32-bit builds. Accepts ints, integral floats, and
-// numeric strings; ok is false when the argument is missing or invalid.
-func int64FromArg(req mcp.CallToolRequest, key string) (int64, bool) {
-	v, ok := req.GetArguments()[key]
-	if !ok {
-		return 0, false
-	}
-	switch n := v.(type) {
-	case int:
-		return int64(n), true
-	case float64:
-		if n != math.Trunc(n) || n < 0 || n > math.MaxInt64 {
-			return 0, false
-		}
-		return int64(n), true
-	case string:
-		id, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64)
-		if err != nil {
-			return 0, false
-		}
-		return id, true
-	default:
-		return 0, false
-	}
-}
-
 // RegisterActions registers the "actions" toolset (GitHub Actions CI/CD).
 func RegisterActions(r Registrar, client *github.Client) {
 	listWorkflows := mcp.NewTool("list_workflows",
 		mcp.WithDescription("List GitHub Actions workflows of a repository."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withRepoArgs(),
+		withPagination(),
 	)
 	r.Add("actions", false, listWorkflows, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -74,8 +28,7 @@ func RegisterActions(r Registrar, client *github.Client) {
 
 	getWorkflow := mcp.NewTool("get_workflow",
 		mcp.WithDescription("Get a single GitHub Actions workflow by ID."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("workflow_id", mcp.Required(), mcp.Description("Workflow ID")),
 	)
 	r.Add("actions", false, getWorkflow, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -96,14 +49,12 @@ func RegisterActions(r Registrar, client *github.Client) {
 
 	listWorkflowRuns := mcp.NewTool("list_workflow_runs",
 		mcp.WithDescription("List workflow runs of a repository, optionally scoped to one workflow."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("workflow_id", mcp.Description("Restrict to this workflow ID (must be an integer, not a string); omit for all workflows")),
 		mcp.WithString("branch", mcp.Description("Filter by branch name")),
 		mcp.WithString("status", mcp.Description("Filter: queued, in_progress, completed, success, failure, cancelled, ...")),
 		mcp.WithString("event", mcp.Description("Filter by event, e.g. push, pull_request, workflow_dispatch")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("actions", false, listWorkflowRuns, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -111,13 +62,10 @@ func RegisterActions(r Registrar, client *github.Client) {
 			return errResult("list workflow runs", err)
 		}
 		opts := &github.ListWorkflowRunsOptions{
-			Branch: req.GetString("branch", ""),
-			Status: req.GetString("status", ""),
-			Event:  req.GetString("event", ""),
-			ListOptions: func() github.ListOptions {
-				page, perPage := pagination(req)
-				return github.ListOptions{Page: page, PerPage: perPage}
-			}(),
+			Branch:      req.GetString("branch", ""),
+			Status:      req.GetString("status", ""),
+			Event:       req.GetString("event", ""),
+			ListOptions: *listOptions(req),
 		}
 		var runs *github.WorkflowRuns
 		if wid, ok := int64FromArg(req, "workflow_id"); ok && wid > 0 {
@@ -133,8 +81,7 @@ func RegisterActions(r Registrar, client *github.Client) {
 
 	getWorkflowRun := mcp.NewTool("get_workflow_run",
 		mcp.WithDescription("Get a single GitHub Actions workflow run."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("run_id", mcp.Required(), mcp.Description("Workflow run ID")),
 	)
 	r.Add("actions", false, getWorkflowRun, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -155,11 +102,9 @@ func RegisterActions(r Registrar, client *github.Client) {
 
 	listWorkflowJobs := mcp.NewTool("list_workflow_jobs",
 		mcp.WithDescription("List jobs of a workflow run, with step-level status."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("run_id", mcp.Required(), mcp.Description("Workflow run ID")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("actions", false, listWorkflowJobs, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -181,8 +126,7 @@ func RegisterActions(r Registrar, client *github.Client) {
 
 	getWorkflowRunLogs := mcp.NewTool("get_workflow_run_logs",
 		mcp.WithDescription("Get a short-lived download URL for the logs of a workflow run."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("run_id", mcp.Required(), mcp.Description("Workflow run ID")),
 	)
 	r.Add("actions", false, getWorkflowRunLogs, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -206,8 +150,7 @@ func RegisterActions(r Registrar, client *github.Client) {
 
 	rerunWorkflow := mcp.NewTool("rerun_workflow",
 		mcp.WithDescription("Re-run a completed GitHub Actions workflow run."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("run_id", mcp.Required(), mcp.Description("Workflow run ID")),
 	)
 	r.Add("actions", true, rerunWorkflow, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -227,8 +170,7 @@ func RegisterActions(r Registrar, client *github.Client) {
 
 	cancelWorkflowRun := mcp.NewTool("cancel_workflow_run",
 		mcp.WithDescription("Cancel an in-progress GitHub Actions workflow run."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("run_id", mcp.Required(), mcp.Description("Workflow run ID")),
 	)
 	r.Add("actions", true, cancelWorkflowRun, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

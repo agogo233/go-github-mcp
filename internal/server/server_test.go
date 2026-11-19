@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/google/go-github/v72/github"
+	mcp "github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	"github.com/agogo233/go-github-mcp/internal/config"
 )
@@ -84,5 +86,38 @@ func TestNewAcceptsValidToolsets(t *testing.T) {
 	}
 	if s == nil {
 		t.Fatal("expected non-nil server")
+	}
+}
+
+// countingRegistrar implements tools.Registrar and counts registered tools.
+type countingRegistrar struct{ n int }
+
+func (c *countingRegistrar) Add(string, bool, mcp.Tool, mcpserver.ToolHandlerFunc) { c.n++ }
+
+func TestToolsetRegistryIsComplete(t *testing.T) {
+	if len(toolsetRegistry) != 18 {
+		t.Fatalf("toolsetRegistry has %d entries, want 18", len(toolsetRegistry))
+	}
+	seen := map[string]bool{}
+	for _, e := range toolsetRegistry {
+		if e.name == "" || e.register == nil {
+			t.Errorf("registry entry %q must have a name and a register func", e.name)
+		}
+		if seen[e.name] {
+			t.Errorf("duplicate toolset %q in registry", e.name)
+		}
+		seen[e.name] = true
+	}
+}
+
+// The registry is the single source of truth; this pins the documented
+// contract of 18 toolsets registering 77 tools in total.
+func TestRegistryRegistersAllTools(t *testing.T) {
+	c := &countingRegistrar{}
+	for _, e := range toolsetRegistry {
+		e.register(c, github.NewClient(nil))
+	}
+	if c.n != 77 {
+		t.Fatalf("registry registered %d tools, want 77", c.n)
 	}
 }

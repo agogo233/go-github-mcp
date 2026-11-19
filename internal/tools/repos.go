@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"strings"
 
 	"github.com/google/go-github/v72/github"
 	mcp "github.com/mark3labs/mcp-go/mcp"
@@ -12,8 +11,7 @@ import (
 func RegisterRepos(r Registrar, client *github.Client) {
 	getRepository := mcp.NewTool("get_repository",
 		mcp.WithDescription("Get metadata for a single repository."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner (user or org)")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 	)
 	r.Add("repos", false, getRepository, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -30,8 +28,7 @@ func RegisterRepos(r Registrar, client *github.Client) {
 	searchRepositories := mcp.NewTool("search_repositories",
 		mcp.WithDescription("Search GitHub repositories with the GitHub search syntax."),
 		mcp.WithString("query", mcp.Required(), mcp.Description("Search query, e.g. 'go mcp server stars:>100'")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("repos", false, searchRepositories, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		q, err := req.RequireString("query")
@@ -49,8 +46,7 @@ func RegisterRepos(r Registrar, client *github.Client) {
 	getFileContents := mcp.NewTool("get_file_contents",
 		mcp.WithDescription("Get the contents of a file or directory listing inside a repository. "+
 			"Large files (>1MB) may return empty content; use get_blob with the file SHA instead."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("path", mcp.Required(), mcp.Description("File or directory path, e.g. 'src/main.go' or 'docs'")),
 		mcp.WithString("ref", mcp.Description("Branch, tag or commit SHA; defaults to the default branch")),
 	)
@@ -92,8 +88,7 @@ func RegisterRepos(r Registrar, client *github.Client) {
 	createOrUpdateFile := mcp.NewTool("create_or_update_file",
 		mcp.WithDescription("Create or update a single text file in a repository and commit it. "+
 			"For multiple files in one commit use push_files."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("path", mcp.Required(), mcp.Description("File path inside the repository")),
 		mcp.WithString("content", mcp.Required(), mcp.Description("Full text content of the file (UTF-8)")),
 		mcp.WithString("message", mcp.Required(), mcp.Description("Commit message")),
@@ -136,8 +131,7 @@ func RegisterRepos(r Registrar, client *github.Client) {
 
 	deleteFile := mcp.NewTool("delete_file",
 		mcp.WithDescription("Delete a file from a repository and commit the deletion."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("path", mcp.Required(), mcp.Description("File path to delete")),
 		mcp.WithString("message", mcp.Required(), mcp.Description("Commit message")),
 		mcp.WithString("branch", mcp.Description("Branch to commit to; defaults to the default branch")),
@@ -181,24 +175,4 @@ func RegisterRepos(r Registrar, client *github.Client) {
 		}
 		return jsonResult(result)
 	})
-}
-
-// ownerRepo extracts the required owner/repo argument pair.
-func ownerRepo(req mcp.CallToolRequest) (string, string, error) {
-	owner, err := req.RequireString("owner")
-	if err != nil {
-		return "", "", err
-	}
-	repo, err := req.RequireString("repo")
-	if err != nil {
-		return "", "", err
-	}
-	return strings.TrimSpace(owner), strings.TrimSpace(repo), nil
-}
-
-func derefString(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }

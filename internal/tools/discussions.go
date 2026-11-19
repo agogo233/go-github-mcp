@@ -30,11 +30,9 @@ func repoPath(owner, repo string) string {
 func RegisterDiscussions(r Registrar, client *github.Client) {
 	listDiscussions := mcp.NewTool("list_discussions",
 		mcp.WithDescription("List discussions of a repository."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("state", mcp.Description("Filter: open, closed, all (default all)")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("discussions", false, listDiscussions, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -61,8 +59,7 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 
 	getDiscussion := mcp.NewTool("get_discussion",
 		mcp.WithDescription("Get a single discussion by number."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("discussion_number", mcp.Required(), mcp.Description("Discussion number")),
 	)
 	r.Add("discussions", false, getDiscussion, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -84,8 +81,7 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 
 	createDiscussion := mcp.NewTool("create_discussion",
 		mcp.WithDescription("Create a discussion. Use list_discussion_categories first to pick a category_id."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("title", mcp.Required(), mcp.Description("Discussion title")),
 		mcp.WithString("body", mcp.Required(), mcp.Description("Discussion body (markdown supported)")),
 		mcp.WithNumber("category_id", mcp.Required(), mcp.Description("Discussion category ID (integer REST id, from the categories endpoint)")),
@@ -122,11 +118,9 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 
 	listDiscussionComments := mcp.NewTool("list_discussion_comments",
 		mcp.WithDescription("List comments of a discussion."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("discussion_number", mcp.Required(), mcp.Description("Discussion number")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("discussions", false, listDiscussionComments, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)

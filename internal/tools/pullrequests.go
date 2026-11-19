@@ -11,13 +11,11 @@ import (
 func RegisterPullRequests(r Registrar, client *github.Client) {
 	listPRs := mcp.NewTool("list_pull_requests",
 		mcp.WithDescription("List pull requests of a repository."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("state", mcp.Description("Filter: open, closed, all (default open)")),
 		mcp.WithString("base", mcp.Description("Filter by base branch")),
 		mcp.WithString("head", mcp.Description("Filter by head in 'user:branch' format")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("pull_requests", false, listPRs, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -25,13 +23,10 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 			return errResult("list pull requests", err)
 		}
 		opts := &github.PullRequestListOptions{
-			State: req.GetString("state", "open"),
-			Base:  req.GetString("base", ""),
-			Head:  req.GetString("head", ""),
-			ListOptions: func() github.ListOptions {
-				page, perPage := pagination(req)
-				return github.ListOptions{Page: page, PerPage: perPage}
-			}(),
+			State:       req.GetString("state", "open"),
+			Base:        req.GetString("base", ""),
+			Head:        req.GetString("head", ""),
+			ListOptions: *listOptions(req),
 		}
 		prs, _, err := client.PullRequests.List(ctx, owner, repo, opts)
 		if err != nil {
@@ -42,8 +37,7 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 
 	getPR := mcp.NewTool("get_pull_request",
 		mcp.WithDescription("Get a single pull request with full metadata."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("pull_number", mcp.Required(), mcp.Description("Pull request number")),
 	)
 	r.Add("pull_requests", false, getPR, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -64,8 +58,7 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 
 	createPR := mcp.NewTool("create_pull_request",
 		mcp.WithDescription("Create a pull request from a head branch into a base branch."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("title", mcp.Required(), mcp.Description("Pull request title")),
 		mcp.WithString("head", mcp.Required(), mcp.Description("Branch containing the changes")),
 		mcp.WithString("base", mcp.Required(), mcp.Description("Branch to merge into")),
@@ -109,8 +102,7 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 
 	updatePR := mcp.NewTool("update_pull_request",
 		mcp.WithDescription("Update a pull request's title, body or state."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("pull_number", mcp.Required(), mcp.Description("Pull request number")),
 		mcp.WithString("title", mcp.Description("New title")),
 		mcp.WithString("body", mcp.Description("New body; omit or pass null to keep the current body unchanged")),
@@ -146,8 +138,7 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 
 	mergePR := mcp.NewTool("merge_pull_request",
 		mcp.WithDescription("Merge a pull request. The branch must be mergeable and required checks must pass."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("pull_number", mcp.Required(), mcp.Description("Pull request number")),
 		mcp.WithString("commit_message", mcp.Description("Extra detail appended to the merge commit")),
 		mcp.WithString("commit_title", mcp.Description("Title of the merge commit")),
@@ -175,11 +166,9 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 
 	getPRFiles := mcp.NewTool("get_pull_request_files",
 		mcp.WithDescription("List the files changed by a pull request with patch diffs."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("pull_number", mcp.Required(), mcp.Description("Pull request number")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("pull_requests", false, getPRFiles, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -199,11 +188,9 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 
 	getPRReviews := mcp.NewTool("get_pull_request_reviews",
 		mcp.WithDescription("List reviews submitted on a pull request."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("pull_number", mcp.Required(), mcp.Description("Pull request number")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("pull_requests", false, getPRReviews, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -224,8 +211,7 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 	addPRComment := mcp.NewTool("add_pull_request_comment",
 		mcp.WithDescription("Add a comment to a pull request. Without path/commit_id it posts a general "+
 			"conversation comment; with them it creates a line-anchored review comment."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("pull_number", mcp.Required(), mcp.Description("Pull request number")),
 		mcp.WithString("body", mcp.Required(), mcp.Description("Comment body (markdown supported)")),
 		mcp.WithString("commit_id", mcp.Description("Commit SHA the comment anchors to (with path/line)")),
@@ -274,8 +260,7 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 
 	getPRStatus := mcp.NewTool("get_pull_request_status",
 		mcp.WithDescription("Get the combined CI status of a pull request's head commit."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("pull_number", mcp.Required(), mcp.Description("Pull request number")),
 	)
 	r.Add("pull_requests", false, getPRStatus, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

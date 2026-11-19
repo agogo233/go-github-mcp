@@ -11,10 +11,8 @@ import (
 func RegisterStargazers(r Registrar, client *github.Client) {
 	listStargazers := mcp.NewTool("list_stargazers",
 		mcp.WithDescription("List users who starred a repository."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withRepoArgs(),
+		withPagination(),
 	)
 	r.Add("stargazers", false, listStargazers, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -32,16 +30,12 @@ func RegisterStargazers(r Registrar, client *github.Client) {
 		mcp.WithDescription("List repositories starred by the authenticated user (or a given username)."),
 		mcp.WithString("username", mcp.Description("Username; empty means the authenticated user")),
 		mcp.WithString("sort", mcp.Description("created or updated (default created)")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("stargazers", false, listStarredRepos, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		opts := &github.ActivityListStarredOptions{
-			Sort: req.GetString("sort", ""),
-			ListOptions: func() github.ListOptions {
-				page, perPage := pagination(req)
-				return github.ListOptions{Page: page, PerPage: perPage}
-			}(),
+			Sort:        req.GetString("sort", ""),
+			ListOptions: *listOptions(req),
 		}
 		starred, _, err := client.Activity.ListStarred(ctx, req.GetString("username", ""), opts)
 		if err != nil {

@@ -65,8 +65,7 @@ query($owner:String!, $repo:String!, $number:Int!, $first:Int!) {
 func RegisterProjects(r Registrar, client *github.Client) {
 	listProjects := mcp.NewTool("list_projects",
 		mcp.WithDescription("List Projects v2 of a repository (GitHub.com; Projects v2 uses the GraphQL API)."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 	)
 	r.Add("projects", false, listProjects, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -84,8 +83,7 @@ func RegisterProjects(r Registrar, client *github.Client) {
 
 	listItems := mcp.NewTool("list_project_items",
 		mcp.WithDescription("List items of a Projects v2 board with their field values (status, etc.)."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("project_number", mcp.Required(), mcp.Description("Project v2 number (not ID)")),
 		mcp.WithNumber("first", mcp.Description("Max items to return (default 20, max 100)")),
 	)

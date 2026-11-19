@@ -16,17 +16,13 @@ func RegisterNotifications(r Registrar, client *github.Client) {
 		mcp.WithBoolean("all", mcp.Description("Include already-read notifications")),
 		mcp.WithBoolean("participating", mcp.Description("Only notifications the user is directly participating in")),
 		mcp.WithString("since", mcp.Description("Only notifications updated at or after this RFC3339 timestamp")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("notifications", false, listNotifications, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		opts := &github.NotificationListOptions{
 			All:           req.GetBool("all", false),
 			Participating: req.GetBool("participating", false),
-			ListOptions: func() github.ListOptions {
-				page, perPage := pagination(req)
-				return github.ListOptions{Page: page, PerPage: perPage}
-			}(),
+			ListOptions:   *listOptions(req),
 		}
 		if v := req.GetString("since", ""); v != "" {
 			t, err := time.Parse(time.RFC3339, v)

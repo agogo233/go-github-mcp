@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"github.com/google/go-github/v72/github"
 	mcp "github.com/mark3labs/mcp-go/mcp"
@@ -17,8 +18,35 @@ import (
 
 const serverName = "go-github-mcp"
 
-// validToolsetsHelp lists every selectable toolset for error messages.
-const validToolsetsHelp = "all, default, context, users, repos, git, issues, labels, pull_requests, actions, notifications, gists, discussions, stargazers, orgs, code_security, secret_protection, dependabot, security_advisories, projects"
+// toolsetEntry is one selectable toolset and its registration hook.
+type toolsetEntry struct {
+	name     string
+	register func(tools.Registrar, *github.Client)
+}
+
+// toolsetRegistry lists every toolset the server can register. Adding a
+// toolset means adding one entry here; the known-name set and the help string
+// are derived from this table, so there is a single source of truth.
+var toolsetRegistry = []toolsetEntry{
+	{"context", tools.RegisterContext},
+	{"users", tools.RegisterUsers},
+	{"repos", tools.RegisterRepos},
+	{"git", tools.RegisterGit},
+	{"issues", tools.RegisterIssues},
+	{"labels", tools.RegisterLabels},
+	{"pull_requests", tools.RegisterPullRequests},
+	{"actions", tools.RegisterActions},
+	{"notifications", tools.RegisterNotifications},
+	{"gists", tools.RegisterGists},
+	{"discussions", tools.RegisterDiscussions},
+	{"stargazers", tools.RegisterStargazers},
+	{"orgs", tools.RegisterOrgs},
+	{"code_security", tools.RegisterCodeSecurity},
+	{"secret_protection", tools.RegisterSecretProtection},
+	{"dependabot", tools.RegisterDependabot},
+	{"security_advisories", tools.RegisterSecurityAdvisories},
+	{"projects", tools.RegisterProjects},
+}
 
 // defaultToolsets mirrors the official github-mcp-server default toolset set.
 var defaultToolsets = map[string]bool{
@@ -29,36 +57,31 @@ var defaultToolsets = map[string]bool{
 	"users":         true,
 }
 
+// knownToolsets lists every toolset name the server can register, plus the
+// special selectors "all" and "default".
+var knownToolsets = func() map[string]bool {
+	m := map[string]bool{"all": true, "default": true}
+	for _, e := range toolsetRegistry {
+		m[e.name] = true
+	}
+	return m
+}()
+
+// validToolsetsHelp lists every selectable toolset for error messages.
+var validToolsetsHelp = func() string {
+	names := make([]string, 0, len(toolsetRegistry)+2)
+	names = append(names, "all", "default")
+	for _, e := range toolsetRegistry {
+		names = append(names, e.name)
+	}
+	return strings.Join(names, ", ")
+}()
+
 // Registrar wraps the MCP server and applies configuration policy
 // (toolset allow-list and read-only mode) before tools are registered.
 type Registrar struct {
 	s   *mcpserver.MCPServer
 	cfg *config.Config
-}
-
-// knownToolsets lists every toolset name the server can register, plus the
-// special selectors "all" and "default".
-var knownToolsets = map[string]bool{
-	"all":                 true,
-	"default":             true,
-	"context":             true,
-	"users":               true,
-	"repos":               true,
-	"git":                 true,
-	"issues":              true,
-	"labels":              true,
-	"pull_requests":       true,
-	"actions":             true,
-	"notifications":       true,
-	"gists":               true,
-	"discussions":         true,
-	"stargazers":          true,
-	"orgs":                true,
-	"code_security":       true,
-	"secret_protection":   true,
-	"dependabot":          true,
-	"security_advisories": true,
-	"projects":            true,
 }
 
 // New builds the MCP server with every configured tool registered. It fails
@@ -72,26 +95,9 @@ func New(cfg *config.Config, client *github.Client, version string) (*mcpserver.
 
 	s := mcpserver.NewMCPServer(serverName, version, mcpserver.WithRecovery())
 	r := &Registrar{s: s, cfg: cfg}
-
-	tools.RegisterContext(r, client)
-	tools.RegisterUsers(r, client)
-	tools.RegisterRepos(r, client)
-	tools.RegisterGit(r, client)
-	tools.RegisterIssues(r, client)
-	tools.RegisterLabels(r, client)
-	tools.RegisterPullRequests(r, client)
-	tools.RegisterActions(r, client)
-	tools.RegisterNotifications(r, client)
-	tools.RegisterGists(r, client)
-	tools.RegisterDiscussions(r, client)
-	tools.RegisterStargazers(r, client)
-	tools.RegisterOrgs(r, client)
-	tools.RegisterCodeSecurity(r, client)
-	tools.RegisterSecretProtection(r, client)
-	tools.RegisterDependabot(r, client)
-	tools.RegisterSecurityAdvisories(r, client)
-	tools.RegisterProjects(r, client)
-
+	for _, e := range toolsetRegistry {
+		e.register(r, client)
+	}
 	return s, nil
 }
 

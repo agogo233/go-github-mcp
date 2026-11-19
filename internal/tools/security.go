@@ -7,23 +7,13 @@ import (
 	mcp "github.com/mark3labs/mcp-go/mcp"
 )
 
-// strPtrIfSet returns a pointer to v when set, else nil (for optional filters).
-func strPtrIfSet(v string) *string {
-	if v == "" {
-		return nil
-	}
-	return github.Ptr(v)
-}
-
 // RegisterCodeSecurity registers the "code_security" toolset (code scanning).
 func RegisterCodeSecurity(r Registrar, client *github.Client) {
 	listAlerts := mcp.NewTool("list_code_scanning_alerts",
 		mcp.WithDescription("List code scanning alerts of a repository."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("state", mcp.Description("Filter: open, closed, fixed, dismissed, all (default open)")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("code_security", false, listAlerts, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -31,11 +21,8 @@ func RegisterCodeSecurity(r Registrar, client *github.Client) {
 			return errResult("list code scanning alerts", err)
 		}
 		opts := &github.AlertListOptions{
-			State: req.GetString("state", "open"),
-			ListOptions: func() github.ListOptions {
-				page, perPage := pagination(req)
-				return github.ListOptions{Page: page, PerPage: perPage}
-			}(),
+			State:       req.GetString("state", "open"),
+			ListOptions: *listOptions(req),
 		}
 		alerts, _, err := client.CodeScanning.ListAlertsForRepo(ctx, owner, repo, opts)
 		if err != nil {
@@ -46,8 +33,7 @@ func RegisterCodeSecurity(r Registrar, client *github.Client) {
 
 	getAlert := mcp.NewTool("get_code_scanning_alert",
 		mcp.WithDescription("Get a single code scanning alert by ID."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("alert_id", mcp.Required(), mcp.Description("Code scanning alert ID")),
 	)
 	r.Add("code_security", false, getAlert, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -68,8 +54,7 @@ func RegisterCodeSecurity(r Registrar, client *github.Client) {
 
 	updateAlert := mcp.NewTool("update_code_scanning_alert",
 		mcp.WithDescription("Update the state of a code scanning alert (dismiss or reopen)."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("alert_id", mcp.Required(), mcp.Description("Code scanning alert ID")),
 		mcp.WithString("state", mcp.Required(), mcp.Description("New state: open, dismissed or fixed")),
 	)
@@ -99,11 +84,9 @@ func RegisterCodeSecurity(r Registrar, client *github.Client) {
 func RegisterSecretProtection(r Registrar, client *github.Client) {
 	listAlerts := mcp.NewTool("list_secret_scanning_alerts",
 		mcp.WithDescription("List secret scanning alerts of a repository."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("state", mcp.Description("Filter: open, resolved, all (default open)")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("secret_protection", false, listAlerts, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -111,11 +94,8 @@ func RegisterSecretProtection(r Registrar, client *github.Client) {
 			return errResult("list secret scanning alerts", err)
 		}
 		opts := &github.SecretScanningAlertListOptions{
-			State: req.GetString("state", "open"),
-			ListOptions: func() github.ListOptions {
-				page, perPage := pagination(req)
-				return github.ListOptions{Page: page, PerPage: perPage}
-			}(),
+			State:       req.GetString("state", "open"),
+			ListOptions: *listOptions(req),
 		}
 		alerts, _, err := client.SecretScanning.ListAlertsForRepo(ctx, owner, repo, opts)
 		if err != nil {
@@ -126,8 +106,7 @@ func RegisterSecretProtection(r Registrar, client *github.Client) {
 
 	getAlert := mcp.NewTool("get_secret_scanning_alert",
 		mcp.WithDescription("Get a single secret scanning alert by number."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("alert_number", mcp.Required(), mcp.Description("Secret scanning alert number")),
 	)
 	r.Add("secret_protection", false, getAlert, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -148,11 +127,9 @@ func RegisterSecretProtection(r Registrar, client *github.Client) {
 
 	listLocations := mcp.NewTool("list_secret_scanning_locations",
 		mcp.WithDescription("List where a leaked secret appears inside a repository."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("alert_number", mcp.Required(), mcp.Description("Secret scanning alert number")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("secret_protection", false, listLocations, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -173,8 +150,7 @@ func RegisterSecretProtection(r Registrar, client *github.Client) {
 	updateAlert := mcp.NewTool("update_secret_scanning_alert",
 		mcp.WithDescription("Update a secret scanning alert's state. Resolving requires a resolution: "+
 			"false_positive, wont_fix, revoked or used_in_tests."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("alert_number", mcp.Required(), mcp.Description("Secret scanning alert number")),
 		mcp.WithString("state", mcp.Required(), mcp.Description("New state: open or resolved")),
 		mcp.WithString("resolution", mcp.Description("Required when state=resolved")),
@@ -208,12 +184,10 @@ func RegisterSecretProtection(r Registrar, client *github.Client) {
 func RegisterDependabot(r Registrar, client *github.Client) {
 	listAlerts := mcp.NewTool("list_dependabot_alerts",
 		mcp.WithDescription("List Dependabot alerts of a repository."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("state", mcp.Description("Filter: open, dismissed, fixed, all (default open)")),
 		mcp.WithString("severity", mcp.Description("Filter: low, medium, high, critical")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withPagination(),
 	)
 	r.Add("dependabot", false, listAlerts, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -221,12 +195,9 @@ func RegisterDependabot(r Registrar, client *github.Client) {
 			return errResult("list dependabot alerts", err)
 		}
 		opts := &github.ListAlertsOptions{
-			State:    strPtrIfSet(req.GetString("state", "open")),
-			Severity: strPtrIfSet(req.GetString("severity", "")),
-			ListOptions: func() github.ListOptions {
-				page, perPage := pagination(req)
-				return github.ListOptions{Page: page, PerPage: perPage}
-			}(),
+			State:       strPtrIfSet(req.GetString("state", "open")),
+			Severity:    strPtrIfSet(req.GetString("severity", "")),
+			ListOptions: *listOptions(req),
 		}
 		alerts, _, err := client.Dependabot.ListRepoAlerts(ctx, owner, repo, opts)
 		if err != nil {
@@ -237,8 +208,7 @@ func RegisterDependabot(r Registrar, client *github.Client) {
 
 	getAlert := mcp.NewTool("get_dependabot_alert",
 		mcp.WithDescription("Get a single Dependabot alert by number."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("alert_number", mcp.Required(), mcp.Description("Dependabot alert number")),
 	)
 	r.Add("dependabot", false, getAlert, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -260,8 +230,7 @@ func RegisterDependabot(r Registrar, client *github.Client) {
 	updateAlert := mcp.NewTool("update_dependabot_alert",
 		mcp.WithDescription("Update a Dependabot alert's state. Dismissing requires a dismissed_reason: "+
 			"fix_started, inaccurate, no_bandwidth, not_used or tolerable_risk."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("alert_number", mcp.Required(), mcp.Description("Dependabot alert number")),
 		mcp.WithString("state", mcp.Required(), mcp.Description("New state: open, dismissed or fixed")),
 		mcp.WithString("dismissed_reason", mcp.Description("Required when state=dismissed")),
@@ -299,8 +268,7 @@ func RegisterDependabot(r Registrar, client *github.Client) {
 func RegisterSecurityAdvisories(r Registrar, client *github.Client) {
 	listRepoAdvisories := mcp.NewTool("list_repository_security_advisories",
 		mcp.WithDescription("List security advisories published for a repository (returns the first batch; cursor pagination not exposed)."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 	)
 	r.Add("security_advisories", false, listRepoAdvisories, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)

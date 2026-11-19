@@ -11,10 +11,8 @@ import (
 func RegisterLabels(r Registrar, client *github.Client) {
 	listLabels := mcp.NewTool("list_labels",
 		mcp.WithDescription("List all labels defined in a repository."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
-		mcp.WithNumber("page", mcp.Description("Page number (starts at 1)")),
-		mcp.WithNumber("per_page", mcp.Description("Results per page (default 30, max 100)")),
+		withRepoArgs(),
+		withPagination(),
 	)
 	r.Add("labels", false, listLabels, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -30,8 +28,7 @@ func RegisterLabels(r Registrar, client *github.Client) {
 
 	getLabel := mcp.NewTool("get_label",
 		mcp.WithDescription("Get a single label by name."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Label name")),
 	)
 	r.Add("labels", false, getLabel, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -52,8 +49,7 @@ func RegisterLabels(r Registrar, client *github.Client) {
 
 	createLabel := mcp.NewTool("create_label",
 		mcp.WithDescription("Create a new repository label."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Label name")),
 		mcp.WithString("color", mcp.Description("Hex color without '#', e.g. 'D73A4A' (default:ededed)")),
 		mcp.WithString("description", mcp.Description("Short label description")),
@@ -83,8 +79,7 @@ func RegisterLabels(r Registrar, client *github.Client) {
 
 	updateLabel := mcp.NewTool("update_label",
 		mcp.WithDescription("Update an existing label's name, color or description."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Current label name")),
 		mcp.WithString("new_name", mcp.Description("New label name")),
 		mcp.WithString("color", mcp.Description("New hex color without '#'")),
@@ -118,8 +113,7 @@ func RegisterLabels(r Registrar, client *github.Client) {
 
 	deleteLabel := mcp.NewTool("delete_label",
 		mcp.WithDescription("Delete a repository label (it disappears from all issues)."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Label name to delete")),
 	)
 	r.Add("labels", true, deleteLabel, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -139,8 +133,7 @@ func RegisterLabels(r Registrar, client *github.Client) {
 
 	addIssueLabels := mcp.NewTool("add_issue_labels",
 		mcp.WithDescription("Add one or more labels to an issue."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("issue_number", mcp.Required(), mcp.Description("Issue number")),
 		mcp.WithArray("labels", mcp.Required(),
 			mcp.Description("Label names to add"),
@@ -169,8 +162,7 @@ func RegisterLabels(r Registrar, client *github.Client) {
 
 	removeIssueLabel := mcp.NewTool("remove_issue_label",
 		mcp.WithDescription("Remove a single label from an issue."),
-		mcp.WithString("owner", mcp.Required(), mcp.Description("Repository owner")),
-		mcp.WithString("repo", mcp.Required(), mcp.Description("Repository name")),
+		withRepoArgs(),
 		mcp.WithNumber("issue_number", mcp.Required(), mcp.Description("Issue number")),
 		mcp.WithString("label", mcp.Required(), mcp.Description("Label name to remove")),
 	)
