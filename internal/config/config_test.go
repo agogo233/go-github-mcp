@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -147,6 +148,38 @@ func TestParseBool(t *testing.T) {
 		}
 		if tc.ok && got != tc.want {
 			t.Errorf("parseBool(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestParseLogLevel(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want slog.Level
+		ok   bool
+	}{
+		{"", slog.LevelInfo, true},
+		{"info", slog.LevelInfo, true},
+		{"INFO", slog.LevelInfo, true},
+		{" DEBUG ", slog.LevelDebug, true},
+		{"Warn ", slog.LevelWarn, true},
+		{"debug", slog.LevelDebug, true},
+		{"warn", slog.LevelWarn, true},
+		{"warning", slog.LevelWarn, true},
+		{"verbose", slog.LevelInfo, false}, // unknown must fail loudly
+		{"log", slog.LevelInfo, false},
+	} {
+		got, err := ParseLogLevel(tc.in)
+		if tc.ok && err != nil {
+			t.Errorf("ParseLogLevel(%q) unexpected error: %v", tc.in, err)
+			continue
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("ParseLogLevel(%q) expected error, got nil", tc.in)
+			continue
+		}
+		if tc.ok && got != tc.want {
+			t.Errorf("ParseLogLevel(%q) = %v, want %v", tc.in, got, tc.want)
 		}
 	}
 }

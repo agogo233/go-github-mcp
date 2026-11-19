@@ -53,6 +53,7 @@ If the PAT is ever compromised: revoke it on GitHub, rotate
 | `GITHUB_TOOLSETS` | no | `default` | Comma list: `default`, `all`, or named toolsets |
 | `GITHUB_TOOLS` | no | – | Comma list of individual tool names to **keep**; intersected with the toolsets enabled via `GITHUB_TOOLSETS` (a listed tool whose toolset is not enabled is skipped with a startup warning) |
 | `READ_ONLY` | no | `false` | Skip registration of all write tools |
+| `LOG_LEVEL` | no | `info` | Log verbosity: `debug`, `info`, or `warn`; `debug` also prints one line per skipped tool at startup |
 
 ## Run with Docker (team-shared HTTP mode)
 

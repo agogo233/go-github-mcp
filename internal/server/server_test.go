@@ -1,6 +1,10 @@
 package server
 
 import (
+	"bytes"
+	"context"
+	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -119,5 +123,118 @@ func TestRegistryRegistersAllTools(t *testing.T) {
 	}
 	if c.n != 100 {
 		t.Fatalf("registry registered %d tools, want 100", c.n)
+	}
+}
+
+// captureLogs redirects the default slog logger into a buffer at the given
+// level for the duration of the test and restores it on cleanup.
+func captureLogs(t *testing.T, level slog.Level) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: level})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf
+}
+
+var noopHandler mcpserver.ToolHandlerFunc = func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return nil, nil
+}
+
+// logFieldValue extracts the value of "key=value" from a slog text line.
+func logFieldValue(line, key string) string {
+	for _, field := range strings.Fields(line) {
+		if k, v, ok := strings.Cut(field, "="); ok && k == key {
+			return v
+		}
+	}
+	return ""
+}
+
+func TestRegistrarSummaryCounts(t *testing.T) {
+	cfg := &config.Config{ReadOnly: true, Toolsets: []string{"issues"}, Tools: []string{"listed", "elsewhere"}}
+	r := &Registrar{s: mcpserver.NewMCPServer("test", "test"), cfg: cfg}
+	buf := captureLogs(t, slog.LevelInfo)
+
+	r.Add("issues", false, mcp.NewTool("listed"), noopHandler)   // registered
+	r.Add("issues", true, mcp.NewTool("elsewhere"), noopHandler) // read-only skip
+	r.Add("actions", false, mcp.NewTool("listed"), noopHandler)  // toolset-disabled skip
+	r.Add("issues", false, mcp.NewTool("ghost"), noopHandler)    // allow-list skip
+	r.logSummary()
+
+	out := buf.String()
+	for _, want := range []string{
+		"registered=1",
+		"skipped_read_only=1",
+		"skipped_toolset_disabled=1",
+		"skipped_allow_list=1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary missing %s, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestNewLogsSingleSummaryInsteadOfPerToolSkips(t *testing.T) {
+	cfg := &config.Config{ReadOnly: true, Toolsets: []string{"default"}}
+	buf := captureLogs(t, slog.LevelInfo)
+	if _, err := New(cfg, github.NewClient(nil), "test"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+	if n := strings.Count(out, "tool registration complete"); n != 1 {
+		t.Fatalf("expected exactly one summary line, got %d:\n%s", n, out)
+	}
+	if strings.Contains(out, "skipping tool excluded by policy") {
+		t.Errorf("per-tool skip lines must not appear at info level:\n%s", out)
+	}
+	// The summary must account for every registry tool (100, pinned above).
+	line := ""
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.Contains(l, "tool registration complete") {
+			line = l
+			break
+		}
+	}
+	sum := 0
+	for _, key := range []string{"registered", "skipped_read_only", "skipped_toolset_disabled", "skipped_allow_list"} {
+		v, err := strconv.Atoi(logFieldValue(line, key))
+		if err != nil {
+			t.Fatalf("summary line %q missing integer field %s", line, key)
+		}
+		sum += v
+	}
+	if sum != 100 {
+		t.Errorf("summary accounts for %d tools, want 100", sum)
+	}
+}
+
+func TestSkippedToolsLoggedAtDebugLevel(t *testing.T) {
+	cfg := &config.Config{ReadOnly: true, Toolsets: []string{"default"}}
+	buf := captureLogs(t, slog.LevelDebug)
+	if _, err := New(cfg, github.NewClient(nil), "test"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "skipping tool excluded by policy") {
+		t.Errorf("debug level should keep per-tool skip details, got:\n%s", out)
+	}
+	if !strings.Contains(out, reasonReadOnly) {
+		t.Errorf("debug lines should carry the skip reason, got:\n%s", out)
+	}
+}
+
+func TestExplicitlyListedExcludedToolWarns(t *testing.T) {
+	cfg := &config.Config{ReadOnly: true, Toolsets: []string{"all"}, Tools: []string{"create_issue"}}
+	buf := captureLogs(t, slog.LevelInfo)
+	r := &Registrar{s: mcpserver.NewMCPServer("test", "test"), cfg: cfg}
+	r.Add("issues", true, mcp.NewTool("create_issue"), noopHandler)
+
+	out := buf.String()
+	if !strings.Contains(out, "tool listed in GITHUB_TOOLS is excluded by policy") {
+		t.Errorf("expected warn for explicitly listed excluded tool, got:\n%s", out)
+	}
+	if !strings.Contains(out, "tool=create_issue") {
+		t.Errorf("warn should name the offending tool, got:\n%s", out)
 	}
 }

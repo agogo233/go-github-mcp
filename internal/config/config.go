@@ -8,6 +8,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"strings"
@@ -105,6 +106,24 @@ func parseList(v string) []string {
 		}
 	}
 	return out
+}
+
+// ParseLogLevel maps the LOG_LEVEL environment value to a slog level.
+// Empty means info. Unknown values fail loudly so a typo does not silently
+// change log verbosity.
+func ParseLogLevel(v string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "":
+		return slog.LevelInfo, nil
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	default:
+		return slog.LevelInfo, fmt.Errorf("invalid log level %q (use debug/info/warn/warning)", v)
+	}
 }
 
 // parseBool accepts common truthy/falsy spellings and rejects anything else

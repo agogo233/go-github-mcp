@@ -28,8 +28,19 @@ func main() {
 		return
 	}
 
+	// Bootstrap logger at info level so configuration errors are visible
+	// even when LOG_LEVEL itself is invalid.
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
+	})))
+
+	level, err := config.ParseLogLevel(os.Getenv("LOG_LEVEL"))
+	if err != nil {
+		slog.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: level,
 	})))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
