@@ -19,11 +19,11 @@ func RegisterStargazers(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("list stargazers", err)
 		}
-		stargazers, _, err := client.Activity.ListStargazers(ctx, owner, repo, listOptions(req))
+		stargazers, resp, err := client.Activity.ListStargazers(ctx, owner, repo, listOptions(req))
 		if err != nil {
 			return errResult("list stargazers", err)
 		}
-		return jsonResult(stargazers)
+		return jsonResultWithPage(resp, stargazers)
 	})
 
 	listStarredRepos := mcp.NewTool("list_starred_repos",
@@ -37,10 +37,10 @@ func RegisterStargazers(r Registrar, client *github.Client) {
 			Sort:        req.GetString("sort", ""),
 			ListOptions: *listOptions(req),
 		}
-		starred, _, err := client.Activity.ListStarred(ctx, req.GetString("username", ""), opts)
+		starred, resp, err := client.Activity.ListStarred(ctx, req.GetString("username", ""), opts)
 		if err != nil {
 			return errResult("list starred repos", err)
 		}
-		return jsonResult(starred)
+		return jsonResultWithPage(resp, starred)
 	})
 }

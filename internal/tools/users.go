@@ -32,10 +32,10 @@ func RegisterUsers(r Registrar, client *github.Client) {
 			return errResult("search users", err)
 		}
 		opts := &github.SearchOptions{ListOptions: *listOptions(req)}
-		result, _, err := client.Search.Users(ctx, q, opts)
+		result, resp, err := client.Search.Users(ctx, q, opts)
 		if err != nil {
 			return errResult("search users", err)
 		}
-		return jsonResult(result)
+		return jsonResultWithPage(resp, result)
 	})
 }

@@ -83,6 +83,31 @@ func formatFieldErrors(errs []github.Error) string {
 	return strings.Join(parts, "; ")
 }
 
+// jsonResultWithPage marshals v as the first content block exactly like
+// jsonResult and appends a second content block carrying pagination info
+// parsed from the GitHub response. Keeping the payload in the first block
+// preserves the pre-existing result shape for clients; the extra block tells
+// callers whether more pages exist.
+func jsonResultWithPage(resp *github.Response, v any) (*mcp.CallToolResult, error) {
+	res, err := jsonResult(v)
+	if err != nil {
+		return res, err
+	}
+	if resp == nil {
+		return res, nil
+	}
+	meta := map[string]any{"has_next": resp.NextPage != 0}
+	if resp.NextPage != 0 {
+		meta["next_page"] = resp.NextPage
+	}
+	encoded, err := json.Marshal(meta)
+	if err != nil {
+		return res, nil
+	}
+	res.Content = append(res.Content, mcp.TextContent{Type: "text", Text: string(encoded)})
+	return res, nil
+}
+
 // pagination reads the common page/per_page arguments with sane bounds.
 func pagination(req mcp.CallToolRequest) (page, perPage int) {
 	page = req.GetInt("page", 1)

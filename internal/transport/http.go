@@ -1,11 +1,14 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -115,8 +118,9 @@ func limitBody(next http.Handler, n int64) http.Handler {
 }
 
 // auditLog records who called what. X-Client-Name is self-reported by the
-// client and is for operational insight only, not strong attribution.
-// The Authorization header is never logged.
+// client and is for operational insight only, not strong attribution. For
+// tools/call requests the invoked tool name is recorded too. The
+// Authorization header is never logged.
 func auditLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" {
@@ -124,20 +128,49 @@ func auditLog(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		tool := mcpToolName(r)
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		defer func() {
-			slog.Info("http request",
+			args := []any{
 				"client", sanitizeLogField(orUnknown(r.Header.Get("X-Client-Name")), 128),
 				"method", r.Method,
 				"path", r.URL.Path,
 				"status", sw.status,
 				"remote", remoteIP(r),
 				"duration_ms", time.Since(start).Milliseconds(),
-			)
+			}
+			if tool != "" {
+				args = append(args, "tool", tool)
+			}
+			slog.Info("http request", args...)
 		}()
 		next.ServeHTTP(sw, r)
 	})
+}
+
+// mcpToolName extracts the invoked tool name from a tools/call JSON-RPC body
+// so audit logs show which tool was invoked, not just that /mcp was hit. The
+// body is re-wrapped for the next handler; its contents are never logged.
+func mcpToolName(r *http.Request) string {
+	if r.Method != http.MethodPost || r.URL.Path != endpointPath || r.Body == nil {
+		return ""
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	if err != nil {
+		return ""
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	var snap struct {
+		Method string `json:"method"`
+		Params struct {
+			Name string `json:"name"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(body, &snap) != nil || snap.Method != "tools/call" {
+		return ""
+	}
+	return sanitizeLogField(snap.Params.Name, 128)
 }
 
 // statusWriter captures the response status code for audit logging. It must

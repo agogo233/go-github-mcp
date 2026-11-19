@@ -19,11 +19,11 @@ func RegisterLabels(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("list labels", err)
 		}
-		labels, _, err := client.Issues.ListLabels(ctx, owner, repo, listOptions(req))
+		labels, resp, err := client.Issues.ListLabels(ctx, owner, repo, listOptions(req))
 		if err != nil {
 			return errResult("list labels", err)
 		}
-		return jsonResult(labels)
+		return jsonResultWithPage(resp, labels)
 	})
 
 	getLabel := mcp.NewTool("get_label",

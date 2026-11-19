@@ -1,6 +1,11 @@
 package githubclient
 
 import (
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/agogo233/go-github-mcp/internal/config"
@@ -51,5 +56,62 @@ func TestNewGheComAlreadyApiHost(t *testing.T) {
 	}
 	if got := c.BaseURL.String(); got != "https://api.sub.ghe.com/" {
 		t.Errorf("BaseURL = %q, want https://api.sub.ghe.com/ (no double prefix)", got)
+	}
+}
+
+// flakyRT fails the first N GET calls with a 500, then succeeds.
+type flakyRT struct{ remaining int }
+
+func (f *flakyRT) RoundTrip(_ *http.Request) (*http.Response, error) {
+	if f.remaining > 0 {
+		f.remaining--
+		return &http.Response{StatusCode: http.StatusInternalServerError, Body: io.NopCloser(strings.NewReader(""))}, nil
+	}
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok"))}, nil
+}
+
+func TestRetryTransportRetriesGetOn5xx(t *testing.T) {
+	base := &flakyRT{remaining: 1}
+	resp, err := retryTransport{base: base}.RoundTrip(httptest.NewRequest(http.MethodGet, "https://example.com", nil))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if base.remaining != 0 {
+		t.Errorf("expected one retry, remaining = %d", base.remaining)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 after retry", resp.StatusCode)
+	}
+}
+
+func TestRetryTransportDoesNotRetryNonGet(t *testing.T) {
+	base := &flakyRT{remaining: 5}
+	resp, err := retryTransport{base: base}.RoundTrip(httptest.NewRequest(http.MethodPost, "https://example.com", nil))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if base.remaining != 4 {
+		t.Errorf("POST must not be retried, remaining = %d", base.remaining)
+	}
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 passed through", resp.StatusCode)
+	}
+}
+
+type failingRT struct{ calls int }
+
+func (f *failingRT) RoundTrip(_ *http.Request) (*http.Response, error) {
+	f.calls++
+	return nil, errors.New("connection reset")
+}
+
+func TestRetryTransportBailsOutAfterBudget(t *testing.T) {
+	base := &failingRT{}
+	_, err := retryTransport{base: base}.RoundTrip(httptest.NewRequest(http.MethodGet, "https://example.com", nil))
+	if err == nil {
+		t.Fatal("expected the connection error to surface")
+	}
+	if base.calls != 3 { // initial + 2 retries
+		t.Errorf("calls = %d, want 3", base.calls)
 	}
 }

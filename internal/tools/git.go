@@ -22,13 +22,13 @@ func RegisterGit(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("list branches", err)
 		}
-		branches, _, err := client.Repositories.ListBranches(ctx, owner, repo, &github.BranchListOptions{
+		branches, resp, err := client.Repositories.ListBranches(ctx, owner, repo, &github.BranchListOptions{
 			ListOptions: *listOptions(req),
 		})
 		if err != nil {
 			return errResult("list branches", err)
 		}
-		return jsonResult(branches)
+		return jsonResultWithPage(resp, branches)
 	})
 
 	createBranch := mcp.NewTool("create_branch",
@@ -90,11 +90,11 @@ func RegisterGit(r Registrar, client *github.Client) {
 		opts := &github.CommitsListOptions{ListOptions: *listOptions(req)}
 		opts.SHA = req.GetString("sha", "")
 		opts.Path = req.GetString("path", "")
-		commits, _, err := client.Repositories.ListCommits(ctx, owner, repo, opts)
+		commits, resp, err := client.Repositories.ListCommits(ctx, owner, repo, opts)
 		if err != nil {
 			return errResult("list commits", err)
 		}
-		return jsonResult(commits)
+		return jsonResultWithPage(resp, commits)
 	})
 
 	getCommit := mcp.NewTool("get_commit",

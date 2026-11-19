@@ -140,3 +140,42 @@ func TestBearerTokenParsing(t *testing.T) {
 		t.Error("sanity")
 	}
 }
+
+// The audit log should name the invoked MCP tool for tools/call requests
+// while leaving the request body intact for the transport.
+func TestAuditLogRecordsMCPToolName(t *testing.T) {
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_file","arguments":{}}}`
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got, _ := io.ReadAll(r.Body)
+		if string(got) != body {
+			t.Errorf("request body not preserved for the next handler: %q", string(got))
+		}
+	})
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	auditLog(next).ServeHTTP(httptest.NewRecorder(), req)
+
+	if !strings.Contains(buf.String(), "tool=delete_file") {
+		t.Errorf("audit log missing tool name, got: %s", buf.String())
+	}
+}
+
+func TestAuditLogOmitsToolNameForNonToolCalls(t *testing.T) {
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`))
+	auditLog(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(httptest.NewRecorder(), req)
+
+	if strings.Contains(buf.String(), "tool=") {
+		t.Errorf("initialize must not be logged as a tool call, got: %s", buf.String())
+	}
+}

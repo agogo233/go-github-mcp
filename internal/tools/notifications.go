@@ -31,11 +31,11 @@ func RegisterNotifications(r Registrar, client *github.Client) {
 			}
 			opts.Since = t
 		}
-		notifications, _, err := client.Activity.ListNotifications(ctx, opts)
+		notifications, resp, err := client.Activity.ListNotifications(ctx, opts)
 		if err != nil {
 			return errResult("list notifications", err)
 		}
-		return jsonResult(notifications)
+		return jsonResultWithPage(resp, notifications)
 	})
 
 	getThread := mcp.NewTool("get_notification_thread",

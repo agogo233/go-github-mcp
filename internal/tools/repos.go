@@ -36,11 +36,11 @@ func RegisterRepos(r Registrar, client *github.Client) {
 			return errResult("search repositories", err)
 		}
 		opts := &github.SearchOptions{ListOptions: *listOptions(req)}
-		result, _, err := client.Search.Repositories(ctx, q, opts)
+		result, resp, err := client.Search.Repositories(ctx, q, opts)
 		if err != nil {
 			return errResult("search repositories", err)
 		}
-		return jsonResult(result)
+		return jsonResultWithPage(resp, result)
 	})
 
 	getFileContents := mcp.NewTool("get_file_contents",

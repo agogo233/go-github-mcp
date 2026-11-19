@@ -19,11 +19,11 @@ func RegisterActions(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("list workflows", err)
 		}
-		workflows, _, err := client.Actions.ListWorkflows(ctx, owner, repo, listOptions(req))
+		workflows, resp, err := client.Actions.ListWorkflows(ctx, owner, repo, listOptions(req))
 		if err != nil {
 			return errResult("list workflows", err)
 		}
-		return jsonResult(workflows)
+		return jsonResultWithPage(resp, workflows)
 	})
 
 	getWorkflow := mcp.NewTool("get_workflow",
@@ -68,15 +68,16 @@ func RegisterActions(r Registrar, client *github.Client) {
 			ListOptions: *listOptions(req),
 		}
 		var runs *github.WorkflowRuns
+		var resp *github.Response
 		if wid, ok := int64FromArg(req, "workflow_id"); ok && wid > 0 {
-			runs, _, err = client.Actions.ListWorkflowRunsByID(ctx, owner, repo, wid, opts)
+			runs, resp, err = client.Actions.ListWorkflowRunsByID(ctx, owner, repo, wid, opts)
 		} else {
-			runs, _, err = client.Actions.ListRepositoryWorkflowRuns(ctx, owner, repo, opts)
+			runs, resp, err = client.Actions.ListRepositoryWorkflowRuns(ctx, owner, repo, opts)
 		}
 		if err != nil {
 			return errResult("list workflow runs", err)
 		}
-		return jsonResult(runs)
+		return jsonResultWithPage(resp, runs)
 	})
 
 	getWorkflowRun := mcp.NewTool("get_workflow_run",
@@ -115,13 +116,13 @@ func RegisterActions(r Registrar, client *github.Client) {
 		if errRes != nil {
 			return errRes, nil
 		}
-		jobs, _, err := client.Actions.ListWorkflowJobs(ctx, owner, repo, runID, &github.ListWorkflowJobsOptions{
+		jobs, resp, err := client.Actions.ListWorkflowJobs(ctx, owner, repo, runID, &github.ListWorkflowJobsOptions{
 			ListOptions: *listOptions(req),
 		})
 		if err != nil {
 			return errResult("list workflow jobs", err)
 		}
-		return jsonResult(jobs)
+		return jsonResultWithPage(resp, jobs)
 	})
 
 	getWorkflowRunLogs := mcp.NewTool("get_workflow_run_logs",

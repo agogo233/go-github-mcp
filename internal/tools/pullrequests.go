@@ -28,11 +28,11 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 			Head:        req.GetString("head", ""),
 			ListOptions: *listOptions(req),
 		}
-		prs, _, err := client.PullRequests.List(ctx, owner, repo, opts)
+		prs, resp, err := client.PullRequests.List(ctx, owner, repo, opts)
 		if err != nil {
 			return errResult("list pull requests", err)
 		}
-		return jsonResult(prs)
+		return jsonResultWithPage(resp, prs)
 	})
 
 	getPR := mcp.NewTool("get_pull_request",
@@ -179,11 +179,11 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("get pull request files", err)
 		}
-		files, _, err := client.PullRequests.ListFiles(ctx, owner, repo, number, listOptions(req))
+		files, resp, err := client.PullRequests.ListFiles(ctx, owner, repo, number, listOptions(req))
 		if err != nil {
 			return errResult("get pull request files", err)
 		}
-		return jsonResult(files)
+		return jsonResultWithPage(resp, files)
 	})
 
 	getPRReviews := mcp.NewTool("get_pull_request_reviews",
@@ -201,11 +201,11 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("get pull request reviews", err)
 		}
-		reviews, _, err := client.PullRequests.ListReviews(ctx, owner, repo, number, listOptions(req))
+		reviews, resp, err := client.PullRequests.ListReviews(ctx, owner, repo, number, listOptions(req))
 		if err != nil {
 			return errResult("get pull request reviews", err)
 		}
-		return jsonResult(reviews)
+		return jsonResultWithPage(resp, reviews)
 	})
 
 	addPRComment := mcp.NewTool("add_pull_request_comment",

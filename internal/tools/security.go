@@ -24,11 +24,11 @@ func RegisterCodeSecurity(r Registrar, client *github.Client) {
 			State:       req.GetString("state", "open"),
 			ListOptions: *listOptions(req),
 		}
-		alerts, _, err := client.CodeScanning.ListAlertsForRepo(ctx, owner, repo, opts)
+		alerts, resp, err := client.CodeScanning.ListAlertsForRepo(ctx, owner, repo, opts)
 		if err != nil {
 			return errResult("list code scanning alerts", err)
 		}
-		return jsonResult(alerts)
+		return jsonResultWithPage(resp, alerts)
 	})
 
 	getAlert := mcp.NewTool("get_code_scanning_alert",
@@ -97,11 +97,11 @@ func RegisterSecretProtection(r Registrar, client *github.Client) {
 			State:       req.GetString("state", "open"),
 			ListOptions: *listOptions(req),
 		}
-		alerts, _, err := client.SecretScanning.ListAlertsForRepo(ctx, owner, repo, opts)
+		alerts, resp, err := client.SecretScanning.ListAlertsForRepo(ctx, owner, repo, opts)
 		if err != nil {
 			return errResult("list secret scanning alerts", err)
 		}
-		return jsonResult(alerts)
+		return jsonResultWithPage(resp, alerts)
 	})
 
 	getAlert := mcp.NewTool("get_secret_scanning_alert",
@@ -140,11 +140,11 @@ func RegisterSecretProtection(r Registrar, client *github.Client) {
 		if errRes != nil {
 			return errRes, nil
 		}
-		locations, _, err := client.SecretScanning.ListLocationsForAlert(ctx, owner, repo, number, listOptions(req))
+		locations, resp, err := client.SecretScanning.ListLocationsForAlert(ctx, owner, repo, number, listOptions(req))
 		if err != nil {
 			return errResult("list secret scanning locations", err)
 		}
-		return jsonResult(locations)
+		return jsonResultWithPage(resp, locations)
 	})
 
 	updateAlert := mcp.NewTool("update_secret_scanning_alert",
@@ -199,11 +199,11 @@ func RegisterDependabot(r Registrar, client *github.Client) {
 			Severity:    strPtrIfSet(req.GetString("severity", "")),
 			ListOptions: *listOptions(req),
 		}
-		alerts, _, err := client.Dependabot.ListRepoAlerts(ctx, owner, repo, opts)
+		alerts, resp, err := client.Dependabot.ListRepoAlerts(ctx, owner, repo, opts)
 		if err != nil {
 			return errResult("list dependabot alerts", err)
 		}
-		return jsonResult(alerts)
+		return jsonResultWithPage(resp, alerts)
 	})
 
 	getAlert := mcp.NewTool("get_dependabot_alert",
@@ -275,12 +275,12 @@ func RegisterSecurityAdvisories(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("list repository security advisories", err)
 		}
-		advisories, _, err := client.SecurityAdvisories.ListRepositorySecurityAdvisories(ctx, owner, repo,
+		advisories, resp, err := client.SecurityAdvisories.ListRepositorySecurityAdvisories(ctx, owner, repo,
 			&github.ListRepositorySecurityAdvisoriesOptions{})
 		if err != nil {
 			return errResult("list repository security advisories", err)
 		}
-		return jsonResult(advisories)
+		return jsonResultWithPage(resp, advisories)
 	})
 
 	getAdvisory := mcp.NewTool("get_security_advisory",

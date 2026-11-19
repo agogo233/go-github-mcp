@@ -46,11 +46,12 @@ func main() {
 		slog.Error("failed to build GitHub client", "error", err)
 		os.Exit(1)
 	}
-	if err := githubclient.Verify(ctx, client); err != nil {
+	login, err := githubclient.Verify(ctx, client)
+	if err != nil {
 		slog.Error("GitHub token self-check failed", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("GitHub token self-check passed", "host", cfg.GitHubHostOrDefault())
+	slog.Info("GitHub token self-check passed", "login", login, "host", cfg.GitHubHostOrDefault())
 
 	mcpServer, err := server.New(cfg, client, version)
 	if err != nil {

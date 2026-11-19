@@ -42,11 +42,11 @@ func RegisterOrgs(r Registrar, client *github.Client) {
 			Role:        req.GetString("role", ""),
 			ListOptions: *listOptions(req),
 		}
-		members, _, err := client.Organizations.ListMembers(ctx, org, opts)
+		members, resp, err := client.Organizations.ListMembers(ctx, org, opts)
 		if err != nil {
 			return errResult("list org members", err)
 		}
-		return jsonResult(members)
+		return jsonResultWithPage(resp, members)
 	})
 
 	listOrgTeams := mcp.NewTool("list_org_teams",
@@ -59,11 +59,11 @@ func RegisterOrgs(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("list org teams", err)
 		}
-		teams, _, err := client.Teams.ListTeams(ctx, org, listOptions(req))
+		teams, resp, err := client.Teams.ListTeams(ctx, org, listOptions(req))
 		if err != nil {
 			return errResult("list org teams", err)
 		}
-		return jsonResult(teams)
+		return jsonResultWithPage(resp, teams)
 	})
 
 	listOrgRepos := mcp.NewTool("list_org_repositories",
@@ -83,10 +83,10 @@ func RegisterOrgs(r Registrar, client *github.Client) {
 			Sort:        req.GetString("sort", ""),
 			ListOptions: *listOptions(req),
 		}
-		repos, _, err := client.Repositories.ListByOrg(ctx, org, opts)
+		repos, resp, err := client.Repositories.ListByOrg(ctx, org, opts)
 		if err != nil {
 			return errResult("list org repositories", err)
 		}
-		return jsonResult(repos)
+		return jsonResultWithPage(resp, repos)
 	})
 }

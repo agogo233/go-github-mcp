@@ -20,7 +20,9 @@ token (PAT) never leaves the server container**.
   MCP client connects over Streamable HTTP with a shared secret. The GitHub
   PAT lives only inside the container.
 - **Auditable**: every HTTP request is logged with the self-reported
-  `X-Client-Name` header (operational insight, not strong attribution).
+  `X-Client-Name` header (operational insight, not strong attribution), and
+  tool invocations are logged with the invoked tool name (HTTP-request level,
+  without tool arguments).
 - **Least privilege**: toolsets can be trimmed via `GITHUB_TOOLSETS`, write
   tools can be globally disabled with `READ_ONLY=true`.
 

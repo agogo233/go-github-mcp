@@ -231,3 +231,45 @@ func TestPushFilesMissingBranchReportsRemedy(t *testing.T) {
 		t.Errorf("error should point at the remedy, got: %s", text)
 	}
 }
+
+func TestListIssuesAppendsPaginationMetadata(t *testing.T) {
+	link := http.Header{"Link": []string{`</api/v3/repos/o/r/issues?page=2&per_page=30>; rel="next"`}}
+	client, _ := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		return http.StatusOK, `[{"number":1,"title":"bug"}]`, link
+	})
+	r := newRecordingRegistrar()
+	RegisterIssues(r, client)
+
+	res, err := r.handlers["list_issues"](context.Background(), reqWithArgs(map[string]any{"owner": "o", "repo": "r"}))
+	if err != nil {
+		t.Fatalf("handler returned protocol error: %v", err)
+	}
+	if len(res.Content) != 2 {
+		t.Fatalf("want 2 content blocks (payload + pagination), got %d", len(res.Content))
+	}
+	if first := res.Content[0].(mcp.TextContent).Text; !strings.HasPrefix(first, "[") {
+		t.Errorf("first block must stay the JSON array, got %q", first)
+	}
+	if second := res.Content[1].(mcp.TextContent).Text; !strings.Contains(second, `"has_next":true`) || !strings.Contains(second, `"next_page":2`) {
+		t.Errorf("pagination block = %q", second)
+	}
+}
+
+func TestListIssuesPaginationMarksLastPage(t *testing.T) {
+	client, _ := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		return http.StatusOK, `[]`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterIssues(r, client)
+
+	res, err := r.handlers["list_issues"](context.Background(), reqWithArgs(map[string]any{"owner": "o", "repo": "r"}))
+	if err != nil {
+		t.Fatalf("handler returned protocol error: %v", err)
+	}
+	if len(res.Content) != 2 {
+		t.Fatalf("want 2 content blocks (payload + pagination), got %d", len(res.Content))
+	}
+	if second := res.Content[1].(mcp.TextContent).Text; !strings.Contains(second, `"has_next":false`) {
+		t.Errorf("pagination block = %q, want has_next false", second)
+	}
+}

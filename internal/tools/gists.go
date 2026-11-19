@@ -51,13 +51,13 @@ func RegisterGists(r Registrar, client *github.Client) {
 		withPagination(),
 	)
 	r.Add("gists", false, listGists, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		gists, _, err := client.Gists.List(ctx, req.GetString("username", ""), &github.GistListOptions{
+		gists, resp, err := client.Gists.List(ctx, req.GetString("username", ""), &github.GistListOptions{
 			ListOptions: *listOptions(req),
 		})
 		if err != nil {
 			return errResult("list gists", err)
 		}
-		return jsonResult(gists)
+		return jsonResultWithPage(resp, gists)
 	})
 
 	getGist := mcp.NewTool("get_gist",

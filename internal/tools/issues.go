@@ -37,11 +37,11 @@ func RegisterIssues(r Registrar, client *github.Client) {
 			}
 			opts.Since = t
 		}
-		issues, _, err := client.Issues.ListByRepo(ctx, owner, repo, opts)
+		issues, resp, err := client.Issues.ListByRepo(ctx, owner, repo, opts)
 		if err != nil {
 			return errResult("list issues", err)
 		}
-		return jsonResult(issues)
+		return jsonResultWithPage(resp, issues)
 	})
 
 	getIssue := mcp.NewTool("get_issue",
@@ -199,12 +199,12 @@ func RegisterIssues(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("list issue comments", err)
 		}
-		comments, _, err := client.Issues.ListComments(ctx, owner, repo, number, &github.IssueListCommentsOptions{
+		comments, resp, err := client.Issues.ListComments(ctx, owner, repo, number, &github.IssueListCommentsOptions{
 			ListOptions: *listOptions(req),
 		})
 		if err != nil {
 			return errResult("list issue comments", err)
 		}
-		return jsonResult(comments)
+		return jsonResultWithPage(resp, comments)
 	})
 }
