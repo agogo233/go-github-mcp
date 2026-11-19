@@ -25,6 +25,27 @@ func repoPath(owner, repo string) string {
 	return url.PathEscape(owner) + "/" + url.PathEscape(repo)
 }
 
+const discussionCategoriesQuery = `
+query($owner:String!, $repo:String!) {
+  repository(owner:$owner, name:$repo) {
+    discussionCategories(first: 50) {
+      nodes { id name description emoji isAnswerable }
+    }
+  }
+}`
+
+const repositoryIdQuery = `
+query($owner:String!, $repo:String!) {
+  repository(owner:$owner, name:$repo) { id }
+}`
+
+const createDiscussionMutation = `
+mutation($repoId:ID!, $categoryId:ID!, $title:String!, $body:String!) {
+  createDiscussion(input:{repositoryId:$repoId, categoryId:$categoryId, title:$title, body:$body}) {
+    discussion { id number title url }
+  }
+}`
+
 // RegisterDiscussions registers the "discussions" toolset.
 func RegisterDiscussions(r Registrar, client *github.Client) {
 	listDiscussions := mcp.NewTool("list_discussions",
@@ -80,11 +101,12 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 	})
 
 	createDiscussion := mcp.NewTool("create_discussion",
-		mcp.WithDescription("Create a discussion. Use list_discussion_categories first to pick a category_id."),
+		mcp.WithDescription("Create a discussion via GraphQL. "+
+			"Use list_discussion_categories first to pick a category_id (GraphQL node ID)."),
 		withRepoArgs(),
 		mcp.WithString("title", mcp.Required(), mcp.Description("Discussion title")),
 		mcp.WithString("body", mcp.Required(), mcp.Description("Discussion body (markdown supported)")),
-		mcp.WithNumber("category_id", mcp.Required(), mcp.Description("Discussion category ID (integer REST id, from the categories endpoint)")),
+		mcp.WithString("category_id", mcp.Required(), mcp.Description("Discussion category GraphQL node ID, from list_discussion_categories")),
 	)
 	r.Add("discussions", true, createDiscussion, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		owner, repo, err := ownerRepo(req)
@@ -99,18 +121,32 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("create discussion", err)
 		}
-		categoryID, err := req.RequireInt("category_id")
+		categoryID, err := req.RequireString("category_id")
 		if err != nil {
 			return errResult("create discussion", err)
 		}
-		payload := map[string]any{
-			"title":       title,
-			"body":        body,
-			"category_id": categoryID,
+		// The mutation needs the repository's GraphQL node ID; resolve it first.
+		var repoOut struct {
+			Data struct {
+				Repository struct {
+					ID string `json:"id"`
+				} `json:"repository"`
+			} `json:"data"`
+		}
+		if err := graphqlQuery(ctx, client, repositoryIdQuery,
+			map[string]any{"owner": owner, "repo": repo}, &repoOut); err != nil {
+			return errResult("create discussion (resolve repository)", err)
+		}
+		if repoOut.Data.Repository.ID == "" {
+			return errResult("create discussion", fmt.Errorf("repository %s/%s not found via GraphQL", owner, repo))
 		}
 		var out any
-		path := fmt.Sprintf("repos/%s/discussions", repoPath(owner, repo))
-		if _, err := restCall(ctx, client, "POST", path, payload, &out); err != nil {
+		if err := graphqlQuery(ctx, client, createDiscussionMutation, map[string]any{
+			"repoId":     repoOut.Data.Repository.ID,
+			"categoryId": categoryID,
+			"title":      title,
+			"body":       body,
+		}, &out); err != nil {
 			return errResult("create discussion", err)
 		}
 		return jsonResult(out)
@@ -140,5 +176,51 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 			return errResult("list discussion comments", err)
 		}
 		return jsonResultWithPage(resp, out)
+	})
+
+	addDiscussionComment := mcp.NewTool("add_discussion_comment",
+		mcp.WithDescription("Add a top-level comment to a discussion."),
+		withRepoArgs(),
+		mcp.WithNumber("discussion_number", mcp.Required(), mcp.Description("Discussion number")),
+		mcp.WithString("body", mcp.Required(), mcp.Description("Comment body (markdown supported)")),
+	)
+	r.Add("discussions", true, addDiscussionComment, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		owner, repo, err := ownerRepo(req)
+		if err != nil {
+			return errResult("add discussion comment", err)
+		}
+		number, err := req.RequireInt("discussion_number")
+		if err != nil {
+			return errResult("add discussion comment", err)
+		}
+		body, err := req.RequireString("body")
+		if err != nil {
+			return errResult("add discussion comment", err)
+		}
+		payload := map[string]any{"body": body}
+		path := fmt.Sprintf("repos/%s/discussions/%d/comments", repoPath(owner, repo), number)
+		var out any
+		if _, err := restCall(ctx, client, "POST", path, payload, &out); err != nil {
+			return errResult("add discussion comment", err)
+		}
+		return jsonResult(out)
+	})
+
+	listDiscussionCategories := mcp.NewTool("list_discussion_categories",
+		mcp.WithDescription("List discussion categories of a repository via GraphQL; "+
+			"the returned id is a GraphQL node ID usable with create_discussion."),
+		withRepoArgs(),
+	)
+	r.Add("discussions", false, listDiscussionCategories, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		owner, repo, err := ownerRepo(req)
+		if err != nil {
+			return errResult("list discussion categories", err)
+		}
+		var out any
+		if err := graphqlQuery(ctx, client, discussionCategoriesQuery,
+			map[string]any{"owner": owner, "repo": repo}, &out); err != nil {
+			return errResult("list discussion categories", err)
+		}
+		return jsonResult(out)
 	})
 }

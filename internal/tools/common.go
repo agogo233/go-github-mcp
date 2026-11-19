@@ -214,6 +214,16 @@ func int64FromArg(req mcp.CallToolRequest, key string) (int64, bool) {
 	}
 }
 
+// isEmptyArg reports whether an argument is present but empty (empty string
+// or nil), which callers usually treat the same as "not provided".
+func isEmptyArg(v any) bool {
+	if v == nil {
+		return true
+	}
+	s, ok := v.(string)
+	return ok && strings.TrimSpace(s) == ""
+}
+
 // withRepoArgs declares the standard owner/repo argument pair.
 func withRepoArgs() mcp.ToolOption {
 	return func(t *mcp.Tool) {

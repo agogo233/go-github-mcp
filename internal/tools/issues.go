@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/go-github/v72/github"
@@ -206,5 +207,138 @@ func RegisterIssues(r Registrar, client *github.Client) {
 			return errResult("list issue comments", err)
 		}
 		return jsonResultWithPage(resp, comments)
+	})
+
+	searchIssues := mcp.NewTool("search_issues",
+		mcp.WithDescription("Search issues across GitHub with the GitHub search syntax. "+
+			"Scope the search with qualifiers like repo:owner/name; results may also match pull requests."),
+		mcp.WithString("query", mcp.Required(), mcp.Description("Search query, e.g. 'repo:owner/name is:open bug'")),
+		mcp.WithString("sort", mcp.Description("Sort field passed through to GitHub, e.g. created, updated, comments")),
+		mcp.WithString("order", mcp.Description("Sort order: asc or desc")),
+		withPagination(),
+	)
+	r.Add("issues", false, searchIssues, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		q, err := req.RequireString("query")
+		if err != nil {
+			return errResult("search issues", err)
+		}
+		opts := &github.SearchOptions{
+			Sort:        req.GetString("sort", ""),
+			Order:       req.GetString("order", ""),
+			ListOptions: *listOptions(req),
+		}
+		result, resp, err := client.Search.Issues(ctx, q, opts)
+		if err != nil {
+			return errResult("search issues", err)
+		}
+		return jsonResultWithPage(resp, result)
+	})
+
+	updateIssueComment := mcp.NewTool("update_issue_comment",
+		mcp.WithDescription("Edit the body of an existing issue or pull request comment."),
+		withRepoArgs(),
+		mcp.WithNumber("comment_id", mcp.Required(), mcp.Description("Comment ID (from list_issue_comments)")),
+		mcp.WithString("body", mcp.Required(), mcp.Description("New comment body (markdown supported)")),
+	)
+	r.Add("issues", true, updateIssueComment, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		owner, repo, err := ownerRepo(req)
+		if err != nil {
+			return errResult("update issue comment", err)
+		}
+		commentID, errRes := int64Arg(req, "comment_id", "update issue comment")
+		if errRes != nil {
+			return errRes, nil
+		}
+		body, err := req.RequireString("body")
+		if err != nil {
+			return errResult("update issue comment", err)
+		}
+		comment, _, err := client.Issues.EditComment(ctx, owner, repo, commentID, &github.IssueComment{Body: github.Ptr(body)})
+		if err != nil {
+			return errResult("update issue comment", err)
+		}
+		return jsonResult(comment)
+	})
+
+	addSubIssue := mcp.NewTool("add_sub_issue",
+		mcp.WithDescription("Attach an existing issue as a sub-issue of a parent issue."),
+		withRepoArgs(),
+		mcp.WithNumber("issue_number", mcp.Required(), mcp.Description("Parent issue number")),
+		mcp.WithNumber("sub_issue_number", mcp.Required(), mcp.Description("Issue number to attach as a sub-issue")),
+	)
+	r.Add("issues", true, addSubIssue, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		owner, repo, err := ownerRepo(req)
+		if err != nil {
+			return errResult("add sub-issue", err)
+		}
+		parent, err := req.RequireInt("issue_number")
+		if err != nil {
+			return errResult("add sub-issue", err)
+		}
+		subNumber, err := req.RequireInt("sub_issue_number")
+		if err != nil {
+			return errResult("add sub-issue", err)
+		}
+		// The sub-issue API takes the database ID, not the issue number.
+		sub, _, err := client.Issues.Get(ctx, owner, repo, subNumber)
+		if err != nil {
+			return errResult("add sub-issue (resolve sub-issue)", err)
+		}
+		payload := map[string]any{"sub_issue_id": sub.GetID()}
+		path := fmt.Sprintf("repos/%s/issues/%d/sub_issues", repoPath(owner, repo), parent)
+		var out any
+		if _, err := restCall(ctx, client, "POST", path, payload, &out); err != nil {
+			return errResult("add sub-issue", err)
+		}
+		return jsonResult(out)
+	})
+
+	removeSubIssue := mcp.NewTool("remove_sub_issue",
+		mcp.WithDescription("Detach a sub-issue from its parent issue."),
+		withRepoArgs(),
+		mcp.WithNumber("issue_number", mcp.Required(), mcp.Description("Parent issue number")),
+		mcp.WithNumber("sub_issue_number", mcp.Required(), mcp.Description("Issue number to detach")),
+	)
+	r.Add("issues", true, removeSubIssue, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		owner, repo, err := ownerRepo(req)
+		if err != nil {
+			return errResult("remove sub-issue", err)
+		}
+		parent, err := req.RequireInt("issue_number")
+		if err != nil {
+			return errResult("remove sub-issue", err)
+		}
+		subNumber, err := req.RequireInt("sub_issue_number")
+		if err != nil {
+			return errResult("remove sub-issue", err)
+		}
+		sub, _, err := client.Issues.Get(ctx, owner, repo, subNumber)
+		if err != nil {
+			return errResult("remove sub-issue (resolve sub-issue)", err)
+		}
+		payload := map[string]any{"sub_issue_id": sub.GetID()}
+		path := fmt.Sprintf("repos/%s/issues/%d/sub_issue", repoPath(owner, repo), parent)
+		var out any
+		if _, err := restCall(ctx, client, "DELETE", path, payload, &out); err != nil {
+			return errResult("remove sub-issue", err)
+		}
+		return jsonResult(map[string]any{"removed": subNumber, "from_issue": parent})
+	})
+
+	listIssueTypes := mcp.NewTool("list_issue_types",
+		mcp.WithDescription("List the issue types configured for an organization (organization-level feature; "+
+			"not available for personal accounts)."),
+		mcp.WithString("org", mcp.Required(), mcp.Description("Organization login")),
+	)
+	r.Add("issues", false, listIssueTypes, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		org, err := req.RequireString("org")
+		if err != nil {
+			return errResult("list issue types", err)
+		}
+		types, _, err := client.Organizations.ListIssueTypes(ctx, org)
+		if err != nil {
+			return errResult("list issue types", err)
+		}
+		return jsonResult(types)
 	})
 }

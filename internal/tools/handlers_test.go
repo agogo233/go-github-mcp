@@ -273,3 +273,53 @@ func TestListIssuesPaginationMarksLastPage(t *testing.T) {
 		t.Errorf("pagination block = %q, want has_next false", second)
 	}
 }
+
+func TestListWorkflowRunsInvalidWorkflowIDFails(t *testing.T) {
+	client, calls := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		return http.StatusOK, `{"total_count":0,"workflow_runs":[]}`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterActions(r, client)
+
+	for _, bad := range []any{"abc", float64(-1), float64(0), true} {
+		text, isErr := callTool(t, r, "list_workflow_runs", map[string]any{"owner": "o", "repo": "r", "workflow_id": bad})
+		if !isErr {
+			t.Errorf("workflow_id %v: expected error result, got: %s", bad, text)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Errorf("invalid workflow_id must not reach the API, calls: %v", *calls)
+	}
+}
+
+func TestListWorkflowRunsEmptyWorkflowIDListsAll(t *testing.T) {
+	client, calls := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		return http.StatusOK, `{"total_count":0,"workflow_runs":[]}`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterActions(r, client)
+
+	text, isErr := callTool(t, r, "list_workflow_runs", map[string]any{"owner": "o", "repo": "r", "workflow_id": ""})
+	if isErr {
+		t.Fatalf("empty workflow_id must list all runs, got error: %s", text)
+	}
+	if len(*calls) == 0 {
+		t.Error("expected the all-runs API call to be made")
+	}
+}
+
+func TestListWorkflowRunsNumericStringWorkflowID(t *testing.T) {
+	client, calls := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		return http.StatusOK, `{"total_count":0,"workflow_runs":[]}`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterActions(r, client)
+
+	text, isErr := callTool(t, r, "list_workflow_runs", map[string]any{"owner": "o", "repo": "r", "workflow_id": "123"})
+	if isErr {
+		t.Fatalf("numeric-string workflow_id must be accepted, got error: %s", text)
+	}
+	if len(*calls) != 1 || !strings.Contains((*calls)[0], "/actions/workflows/123/runs") {
+		t.Errorf("expected the per-workflow API call, calls: %v", *calls)
+	}
+}

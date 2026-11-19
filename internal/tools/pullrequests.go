@@ -286,4 +286,30 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 		}
 		return jsonResult(status)
 	})
+
+	searchPRs := mcp.NewTool("search_pull_requests",
+		mcp.WithDescription("Search pull requests with the GitHub search syntax. "+
+			"'is:pr' is added automatically; do not repeat it in the query. "+
+			"Scope the search with qualifiers like repo:owner/name."),
+		mcp.WithString("query", mcp.Required(), mcp.Description("Search query, e.g. 'repo:owner/name is:open refactor'")),
+		mcp.WithString("sort", mcp.Description("Sort field passed through to GitHub, e.g. created, updated, comments")),
+		mcp.WithString("order", mcp.Description("Sort order: asc or desc")),
+		withPagination(),
+	)
+	r.Add("pull_requests", false, searchPRs, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		q, err := req.RequireString("query")
+		if err != nil {
+			return errResult("search pull requests", err)
+		}
+		opts := &github.SearchOptions{
+			Sort:        req.GetString("sort", ""),
+			Order:       req.GetString("order", ""),
+			ListOptions: *listOptions(req),
+		}
+		result, resp, err := client.Search.Issues(ctx, "is:pr "+q, opts)
+		if err != nil {
+			return errResult("search pull requests", err)
+		}
+		return jsonResultWithPage(resp, result)
+	})
 }
