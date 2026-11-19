@@ -121,12 +121,13 @@ func RegisterActions(r Registrar, client *github.Client) {
 	})
 
 	listWorkflowRuns := mcp.NewTool("list_workflow_runs",
-		mcp.WithDescription("List workflow runs of a repository, optionally scoped to one workflow."),
+		mcp.WithDescription("List workflow runs of a repository, optionally scoped to one workflow, branch, status, event, or head commit SHA."),
 		withRepoArgs(),
 		mcp.WithNumber("workflow_id", mcp.Description("Restrict to this workflow ID (number or numeric string); omit for all workflows")),
 		mcp.WithString("branch", mcp.Description("Filter by branch name")),
 		mcp.WithString("status", mcp.Description("Filter: queued, in_progress, completed, success, failure, cancelled, ...")),
 		mcp.WithString("event", mcp.Description("Filter by event, e.g. push, pull_request, workflow_dispatch")),
+		mcp.WithString("head_sha", mcp.Description("Filter by head commit SHA (full 40-char SHA recommended; filters are combined with AND)")),
 		withPagination(),
 	)
 	r.Add("actions", false, listWorkflowRuns, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -138,6 +139,7 @@ func RegisterActions(r Registrar, client *github.Client) {
 			Branch:      req.GetString("branch", ""),
 			Status:      req.GetString("status", ""),
 			Event:       req.GetString("event", ""),
+			HeadSHA:     req.GetString("head_sha", ""),
 			ListOptions: *listOptions(req),
 		}
 		var runs *github.WorkflowRuns

@@ -271,3 +271,48 @@ func TestGetWorkflowRunLogsContentModeWithTail(t *testing.T) {
 		t.Errorf("unexpected calls: %v", *calls)
 	}
 }
+
+// head_sha must be forwarded to the GitHub API as the head_sha query
+// parameter so callers can scope runs to a specific commit.
+func TestListWorkflowRunsFiltersByHeadSHA(t *testing.T) {
+	var gotHeadSHA string
+	client, _ := newFakeGitHub(t, func(r *http.Request) (int, string, http.Header) {
+		gotHeadSHA = r.URL.Query().Get("head_sha")
+		return http.StatusOK, `{"total_count":0,"workflow_runs":[]}`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterActions(r, client)
+
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	text, isErr := callTool(t, r, "list_workflow_runs", map[string]any{
+		"owner": "o", "repo": "r", "head_sha": sha,
+	})
+	if isErr {
+		t.Fatalf("unexpected error result: %s", text)
+	}
+	if gotHeadSHA != sha {
+		t.Errorf("head_sha not forwarded: got %q, want %q", gotHeadSHA, sha)
+	}
+}
+
+// An absent head_sha must not add the query parameter at all, keeping the
+// request identical to the pre-filter behavior.
+func TestListWorkflowRunsOmitsHeadSHAByDefault(t *testing.T) {
+	var rawQuery string
+	client, _ := newFakeGitHub(t, func(r *http.Request) (int, string, http.Header) {
+		rawQuery = r.URL.RawQuery
+		return http.StatusOK, `{"total_count":0,"workflow_runs":[]}`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterActions(r, client)
+
+	text, isErr := callTool(t, r, "list_workflow_runs", map[string]any{
+		"owner": "o", "repo": "r",
+	})
+	if isErr {
+		t.Fatalf("unexpected error result: %s", text)
+	}
+	if strings.Contains(rawQuery, "head_sha") {
+		t.Errorf("head_sha must not be sent when omitted, query: %s", rawQuery)
+	}
+}
