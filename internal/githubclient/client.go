@@ -119,7 +119,7 @@ func (t retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err == nil {
 			// Drain and close so the connection can be reused on retry.
 			_, _ = io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		select {
 		case <-time.After(delays[attempt]):

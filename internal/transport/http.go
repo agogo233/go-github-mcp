@@ -35,7 +35,7 @@ func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config) er
 	mcpMux := http.NewServeMux()
 	mcpMux.Handle(endpointPath, mcpHTTP)
 
-	var protected http.Handler = auditLog(mcpMux)
+	protected := auditLog(mcpMux)
 	if cfg.AuthToken != "" {
 		// Auth wraps audit so unauthenticated requests are rejected before
 		// their body is buffered for tool-name extraction.
