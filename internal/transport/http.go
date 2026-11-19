@@ -211,8 +211,11 @@ func mcpToolName(r *http.Request) string {
 
 // scanToolName walks the top level of a JSON-RPC request looking for
 // {"method":"tools/call","params":{"name":...}} and returns the tool name.
-// It tolerates either field order and stops as soon as the name is known, the
-// object ends, or the request is clearly not a tools/call.
+// Either field order is tolerated, with one caveat: when params comes first
+// and its remaining fields (e.g. huge arguments) extend beyond the probe
+// window, the scan ends before method can be confirmed and the name is
+// skipped. The scan stops as soon as the name is known, the object ends, or
+// the request is clearly not a tools/call.
 func scanToolName(dec *json.Decoder) string {
 	tok, err := dec.Token()
 	if err != nil {
@@ -227,8 +230,8 @@ func scanToolName(dec *json.Decoder) string {
 		if !ok {
 			return ""
 		}
-		switch {
-		case key == "method":
+		switch key {
+		case "method":
 			v, err := dec.Token()
 			if err != nil {
 				return ""
@@ -242,7 +245,9 @@ func scanToolName(dec *json.Decoder) string {
 			if name != "" {
 				return name
 			}
-		case key == "params" && method == "tools/call":
+		case "params":
+			// Parse params.name regardless of field order: it only names a
+			// tool once the request is known to be a tools/call.
 			if !expectObject(dec) {
 				return ""
 			}
@@ -251,13 +256,19 @@ func scanToolName(dec *json.Decoder) string {
 				if !ok {
 					break
 				}
-				if pkey == "name" {
+				if pkey == "name" && name == "" {
 					v, err := dec.Token()
 					if err != nil {
 						return ""
 					}
-					if s, ok := v.(string); ok && s != "" {
-						return s
+					if s, ok := v.(string); ok {
+						name = s
+					}
+					if method == "tools/call" {
+						// Method already confirmed: return immediately so
+						// oversized arguments are never pulled through the
+						// probe window.
+						return name
 					}
 					continue
 				}
@@ -265,6 +276,9 @@ func scanToolName(dec *json.Decoder) string {
 				if err := skipValue(dec); err != nil {
 					return ""
 				}
+			}
+			if method == "tools/call" && name != "" {
+				return name
 			}
 		default:
 			if err := skipValue(dec); err != nil {
@@ -274,9 +288,18 @@ func scanToolName(dec *json.Decoder) string {
 	}
 }
 
+func expectObject(dec *json.Decoder) bool {
+	tok, err := dec.Token()
+	if err != nil {
+		return false
+	}
+	d, ok := tok.(json.Delim)
+	return ok && d == '{'
+}
+
 // skipValue consumes the next JSON value (object, array or literal) from the
-// decoder, including all nested tokens. It is a portable stand-in for
-// json.Decoder.Skip on older toolchains.
+// decoder, including all nested tokens. The standard library has no
+// Decoder.Skip, so the token-level skip is implemented here.
 func skipValue(dec *json.Decoder) error {
 	tok, err := dec.Token()
 	if err != nil {
@@ -303,15 +326,6 @@ func skipValue(dec *json.Decoder) error {
 		}
 	}
 	return nil
-}
-
-func expectObject(dec *json.Decoder) bool {
-	tok, err := dec.Token()
-	if err != nil {
-		return false
-	}
-	d, ok := tok.(json.Delim)
-	return ok && d == '{'
 }
 
 // nextObjectKey reads the next key of an open object; ok is false once the

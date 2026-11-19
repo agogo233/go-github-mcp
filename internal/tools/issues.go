@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/google/go-github/v72/github"
@@ -188,7 +189,7 @@ func RegisterIssues(r Registrar, client *github.Client) {
 		}
 		if v, ok := req.GetArguments()["milestone"]; ok {
 			f, isNum := v.(float64)
-			if !isNum || f <= 0 || f != float64(int64(f)) {
+			if !isNum || f < 1 || f > math.MaxInt32 || f != math.Trunc(f) {
 				return errResult("update issue", fmt.Errorf("milestone must be a positive milestone number; clearing a milestone is not supported"))
 			}
 			m := int(f)

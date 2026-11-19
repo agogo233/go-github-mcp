@@ -211,6 +211,32 @@ func TestAuditLogLargeBodyPreservesBodyAndSkipsDistantToolName(t *testing.T) {
 	}
 }
 
+// JSON-RPC does not mandate member order: params.name must still be picked
+// up when it precedes method in the body.
+func TestAuditLogRecordsToolNameWhenParamsPrecedeMethod(t *testing.T) {
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	body := `{"jsonrpc":"2.0","id":1,"params":{"name":"delete_file","arguments":{}},"method":"tools/call"}`
+	var got string
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got = string(b)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	auditLog(next).ServeHTTP(httptest.NewRecorder(), req)
+
+	if !strings.Contains(buf.String(), "tool=delete_file") {
+		t.Errorf("audit log missing tool name for params-first body, got: %s", buf.String())
+	}
+	if got != body {
+		t.Errorf("request body not preserved for the next handler: %q", got)
+	}
+}
+
 // A tools/call larger than the probe window whose tool name sits inside the
 // first 64 KiB must still be attributed in the audit log, with the body
 // forwarded intact.
