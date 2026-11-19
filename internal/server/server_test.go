@@ -3,14 +3,18 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-github/v72/github"
 	mcp "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/mark3labs/mcp-go/server/servertest"
 
 	"github.com/agogo233/go-github-mcp/internal/config"
 )
@@ -236,5 +240,71 @@ func TestExplicitlyListedExcludedToolWarns(t *testing.T) {
 	}
 	if !strings.Contains(out, "tool=create_issue") {
 		t.Errorf("warn should name the offending tool, got:\n%s", out)
+	}
+}
+
+func TestBuildInstructionsReflectsReadOnly(t *testing.T) {
+	ro := buildInstructions(&config.Config{ReadOnly: true, Toolsets: []string{"default"}})
+	for _, want := range []string{"READ-ONLY", "get_me", "owner", "per_page"} {
+		if !strings.Contains(ro, want) {
+			t.Errorf("read-only instructions missing %q, got:\n%s", want, ro)
+		}
+	}
+
+	rw := buildInstructions(&config.Config{Toolsets: []string{"default"}})
+	if strings.Contains(rw, "READ-ONLY") {
+		t.Errorf("writable instructions must not claim read-only mode, got:\n%s", rw)
+	}
+	if !strings.Contains(rw, "Write tools are available") {
+		t.Errorf("writable instructions should state write availability, got:\n%s", rw)
+	}
+}
+
+// The instructions must actually reach agents: an initialize handshake over
+// the real HTTP transport has to return them in result.instructions.
+func TestInitializeReturnsInstructions(t *testing.T) {
+	cfg := &config.Config{ReadOnly: true, Toolsets: []string{"default"}}
+	s, err := New(cfg, github.NewClient(nil), "test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ts := servertest.NewTestStreamableHTTPServer(s)
+	defer ts.Close()
+	captureLogs(t, slog.LevelInfo) // keep the startup summary out of test output
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{` +
+		`"protocolVersion":"2025-11-25","capabilities":{},` +
+		`"clientInfo":{"name":"test-client","version":"1.0"}}}`
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/mcp", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("initialize request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("initialize status = %d, want 200", resp.StatusCode)
+	}
+
+	var parsed struct {
+		Result struct {
+			Instructions string `json:"instructions"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatalf("decode initialize response: %v", err)
+	}
+	if parsed.Result.Instructions == "" {
+		t.Fatal("initialize response must carry non-empty instructions")
+	}
+	for _, want := range []string{"get_me", "READ-ONLY"} {
+		if !strings.Contains(parsed.Result.Instructions, want) {
+			t.Errorf("instructions missing %q, got:\n%s", want, parsed.Result.Instructions)
+		}
 	}
 }

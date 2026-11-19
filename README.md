@@ -55,6 +55,15 @@ If the PAT is ever compromised: revoke it on GitHub, rotate
 | `READ_ONLY` | no | `false` | Skip registration of all write tools |
 | `LOG_LEVEL` | no | `info` | Log verbosity: `debug`, `info`, or `warn`; `debug` also prints one line per skipped tool at startup |
 
+## Agent onboarding
+
+Agents get usage guidance for free: the server returns `instructions` in the
+MCP initialize response, covering the auth check via `get_me`, the
+`owner`/`repo` parameter convention, `page`/`per_page` pagination, JSON-in-text
+results, error handling, and the current read-only mode. No extra setup is
+needed on the agent side; this README remains the reference for human
+operators.
+
 ## Run with Docker (team-shared HTTP mode)
 
 ```bash

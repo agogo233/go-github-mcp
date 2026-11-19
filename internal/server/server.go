@@ -107,13 +107,40 @@ func New(cfg *config.Config, client *github.Client, version string) (*mcpserver.
 		}
 	}
 
-	s := mcpserver.NewMCPServer(serverName, version, mcpserver.WithRecovery())
+	s := mcpserver.NewMCPServer(serverName, version,
+		mcpserver.WithRecovery(),
+		mcpserver.WithInstructions(buildInstructions(cfg)),
+	)
 	r := &Registrar{s: s, cfg: cfg}
 	for _, e := range toolsetRegistry {
 		e.register(r, client)
 	}
 	r.logSummary()
 	return s, nil
+}
+
+// buildInstructions returns the usage guidance served to agents in the
+// initialize response. It states the operational mode and the conventions
+// shared by all tools so agents can act without trial and error.
+func buildInstructions(cfg *config.Config) string {
+	mode := "Write tools are available on this deployment (READ_ONLY is not set)."
+	if cfg.ReadOnly {
+		mode = "This deployment runs in READ-ONLY mode: write tools are not registered, so write tool calls are rejected as unknown tools; use read tools only."
+	}
+	return strings.Join([]string{
+		"go-github-mcp exposes GitHub REST operations as MCP tools.",
+		"",
+		"Getting started:",
+		"- Call get_me first to verify authentication and see which account this server acts as.",
+		"- Repository tools take owner and repo as separate required parameters: owner is the user or organization login, repo is the repository name.",
+		"- List tools paginate with page (starts at 1) and per_page (default 30, max 100); omit both for the first page.",
+		"- List results may append a second text block with pagination metadata (has_next/next_page); check it before fetching the next page.",
+		"- Tool results carry JSON as text content; parse that text, not the wrapper.",
+		"- On failure a tool returns isError=true with a message describing the GitHub API error; read that message before retrying.",
+		"",
+		"Mode: " + mode,
+		"Which toolsets are enabled depends on this deployment's configuration; treat the tool list as the source of truth for what exists and which parameters are required.",
+	}, "\n")
 }
 
 // logSummary emits one line describing the registration outcome, replacing
