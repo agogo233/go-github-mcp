@@ -48,13 +48,16 @@ var toolsetRegistry = []toolsetEntry{
 	{"projects", tools.RegisterProjects},
 }
 
-// defaultToolsets mirrors the official github-mcp-server default toolset set.
+// defaultToolsets is the set enabled by GITHUB_TOOLSETS=default. It mirrors
+// the official github-mcp-server default set, plus the actions toolset so
+// CI/CD run and job introspection works out of the box.
 var defaultToolsets = map[string]bool{
 	"context":       true,
 	"repos":         true,
 	"issues":        true,
 	"pull_requests": true,
 	"users":         true,
+	"actions":       true,
 }
 
 // knownToolsets lists every toolset name the server can register, plus the
@@ -202,7 +205,8 @@ func toolAllowed(cfg *config.Config, toolset, tool string, writable bool) (bool,
 }
 
 // toolsetEnabled reports whether a toolset is enabled by GITHUB_TOOLSETS.
-// "all" enables everything; "default" enables the official default set.
+// "all" enables everything; "default" enables the curated default set in
+// defaultToolsets.
 func toolsetEnabled(cfg *config.Config, name string) bool {
 	all := false
 	def := false

@@ -31,15 +31,15 @@ func TestToolAllowed(t *testing.T) {
 	}{
 		{"default toolset read tool", base, "issues", "list_issues", false, true},
 		{"default toolset write tool", base, "issues", "create_issue", true, true},
-		{"non-default toolset disabled", base, "actions", "list_workflows", false, false},
+		{"non-default toolset disabled", base, "git", "list_branches", false, false},
 		{"read-only drops write tool", &config.Config{ReadOnly: true, Toolsets: []string{"all"}}, "issues", "create_issue", true, false},
 		{"read-only keeps read tool", &config.Config{ReadOnly: true, Toolsets: []string{"all"}}, "issues", "list_issues", false, true},
 		{"all enables every toolset", &config.Config{Toolsets: []string{"all"}}, "actions", "list_workflows", true, true},
-		{"explicit extra toolset", &config.Config{Toolsets: []string{"default", "actions"}}, "actions", "list_workflows", false, true},
+		{"explicit extra toolset", &config.Config{Toolsets: []string{"default", "labels"}}, "labels", "list_labels", false, true},
 		{"github_tools blocks unlisted tool", &config.Config{Toolsets: []string{"all"}, Tools: []string{"get_me"}}, "issues", "list_issues", false, false},
 		{"github_tools allow-list hit", &config.Config{Toolsets: []string{"all"}, Tools: []string{"create_issue"}}, "issues", "create_issue", true, true},
 		{"github_tools cannot bypass read-only", &config.Config{ReadOnly: true, Toolsets: []string{"all"}, Tools: []string{"create_issue"}}, "issues", "create_issue", true, false},
-		{"github_tools cannot bypass toolsets", &config.Config{Toolsets: []string{"default"}, Tools: []string{"list_workflows"}}, "actions", "list_workflows", false, false},
+		{"github_tools cannot bypass toolsets", &config.Config{Toolsets: []string{"default"}, Tools: []string{"list_branches"}}, "git", "list_branches", false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

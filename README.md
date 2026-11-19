@@ -172,8 +172,11 @@ MCP_TRANSPORT=http AUTH_TOKEN=s3cret ./bin/go-github-mcp   # http transport
 ## Tools (M4)
 
 Enabled by default (`GITHUB_TOOLSETS=default`): `context`, `users`, `repos`,
-`issues`, `pull_requests`. All other toolsets must be enabled explicitly,
-e.g. `GITHUB_TOOLSETS=default,git,labels,actions` or `GITHUB_TOOLSETS=all`.
+`issues`, `pull_requests`, `actions`. All other toolsets must be enabled
+explicitly, e.g. `GITHUB_TOOLSETS=default,git,labels` or `GITHUB_TOOLSETS=all`.
+The default set includes the actions write tools `rerun_workflow` and
+`cancel_workflow_run`; disable them with `READ_ONLY=true` or by trimming
+`GITHUB_TOOLSETS`.
 
 | Toolset | Tools |
 |---|---|
