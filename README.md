@@ -49,7 +49,7 @@ If the PAT is ever compromised: revoke it on GitHub, rotate
 | `ALLOW_UNAUTHENTICATED` | no | `false` | Local-debugging escape hatch to skip Bearer auth |
 | `GITHUB_HOST` | no | `github.com` | GHES / ghe.com hostname (https enforced) |
 | `GITHUB_TOOLSETS` | no | `default` | Comma list: `default`, `all`, or named toolsets |
-| `GITHUB_TOOLS` | no | – | Comma list of individual tool names to add |
+| `GITHUB_TOOLS` | no | – | Comma list of individual tool names to **keep**; intersected with the toolsets enabled via `GITHUB_TOOLSETS` (a listed tool whose toolset is not enabled is skipped with a startup warning) |
 | `READ_ONLY` | no | `false` | Skip registration of all write tools |
 
 ## Run with Docker (team-shared HTTP mode)

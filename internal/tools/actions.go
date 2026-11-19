@@ -2,19 +2,53 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"math"
+	"strconv"
+	"strings"
 
 	"github.com/google/go-github/v72/github"
 	mcp "github.com/mark3labs/mcp-go/mcp"
 )
 
-// int64Arg reads a required int64 argument (workflow/run/job IDs).
+// int64Arg reads a required int64 argument (workflow/run/job IDs). It inspects
+// the raw argument instead of mcp-go's int helpers so large IDs survive on
+// 32-bit platforms where int is only 32 bits.
 func int64Arg(req mcp.CallToolRequest, key, action string) (int64, *mcp.CallToolResult) {
-	v, err := req.RequireInt(key)
-	if err != nil {
-		res, _ := errResult(action, err)
+	id, ok := int64FromArg(req, key)
+	if !ok {
+		res, _ := errResult(action, fmt.Errorf("argument %q is required and must be an integer ID", key))
 		return 0, res
 	}
-	return int64(v), nil
+	return id, nil
+}
+
+// int64FromArg extracts an integer ID from a tool argument without
+// platform-dependent narrowing: JSON numbers arrive as float64 and must not
+// pass through int on 32-bit builds. Accepts ints, integral floats, and
+// numeric strings; ok is false when the argument is missing or invalid.
+func int64FromArg(req mcp.CallToolRequest, key string) (int64, bool) {
+	v, ok := req.GetArguments()[key]
+	if !ok {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case int:
+		return int64(n), true
+	case float64:
+		if n != math.Trunc(n) || n < 0 || n > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(n), true
+	case string:
+		id, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return id, true
+	default:
+		return 0, false
+	}
 }
 
 // RegisterActions registers the "actions" toolset (GitHub Actions CI/CD).
@@ -86,8 +120,8 @@ func RegisterActions(r Registrar, client *github.Client) {
 			}(),
 		}
 		var runs *github.WorkflowRuns
-		if wid := req.GetInt("workflow_id", 0); wid > 0 {
-			runs, _, err = client.Actions.ListWorkflowRunsByID(ctx, owner, repo, int64(wid), opts)
+		if wid, ok := int64FromArg(req, "workflow_id"); ok && wid > 0 {
+			runs, _, err = client.Actions.ListWorkflowRunsByID(ctx, owner, repo, wid, opts)
 		} else {
 			runs, _, err = client.Actions.ListRepositoryWorkflowRuns(ctx, owner, repo, opts)
 		}

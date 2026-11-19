@@ -29,19 +29,34 @@ func New(cfg *config.Config) (*github.Client, error) {
 	if !strings.Contains(host, "://") {
 		host = "https://" + host
 	}
-	base, err := url.Parse(strings.TrimSuffix(host, "/") + "/")
+	host = strings.TrimSuffix(host, "/")
+	base, err := url.Parse(host + "/")
 	if err != nil {
 		return nil, fmt.Errorf("invalid GITHUB_HOST %q: %w", cfg.GitHubHost, err)
 	}
-	upload, err := url.Parse(strings.TrimSuffix(host, "/") + "/api/uploads/")
+	upload, err := url.Parse(host + "/api/uploads/")
 	if err != nil {
 		return nil, fmt.Errorf("invalid GITHUB_HOST upload URL: %w", err)
 	}
+	rewriteGheComHost(base)
+	rewriteGheComHost(upload)
 	client, err := github.NewClient(httpClient).WithEnterpriseURLs(base.String(), upload.String())
 	if err != nil {
 		return nil, fmt.Errorf("invalid GITHUB_HOST %q: %w", cfg.GitHubHost, err)
 	}
 	return client.WithAuthToken(cfg.GitHubToken), nil
+}
+
+// rewriteGheComHost maps GitHub data-residency hosts (<sub>.ghe.com) to their
+// API host (api.<sub>.ghe.com). go-github's WithEnterpriseURLs appends the
+// "/api/v3/" path suffix to classic GHES hosts, but ghe.com serves the REST
+// API directly from the api.<sub>.ghe.com root; rewriting the host before
+// validation keeps that suffix off and points requests at the right endpoint.
+func rewriteGheComHost(u *url.URL) {
+	h := u.Hostname()
+	if strings.HasSuffix(h, ".ghe.com") && !strings.HasPrefix(h, "api.") {
+		u.Host = "api." + u.Host
+	}
 }
 
 // Verify performs a lightweight authenticated call so the server fails fast

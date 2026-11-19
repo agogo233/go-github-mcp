@@ -77,4 +77,19 @@ func TestInt64Arg(t *testing.T) {
 	if _, res := int64Arg(reqWithArgs(map[string]any{"id": "abc"}), "id", "fetch widget"); res == nil {
 		t.Error("expected error result when argument is not numeric")
 	}
+	if _, res := int64Arg(reqWithArgs(map[string]any{"id": 42.7}), "id", "fetch widget"); res == nil {
+		t.Error("expected error result when argument is not an integer")
+	}
+	if _, res := int64Arg(reqWithArgs(map[string]any{"id": float64(-1)}), "id", "fetch widget"); res == nil {
+		t.Error("expected error result when argument is negative")
+	}
+
+	// Workflow run IDs already exceed 2^31; they must survive unchanged.
+	const bigID = 5_000_000_000
+	if id, res := int64Arg(reqWithArgs(map[string]any{"id": float64(bigID)}), "id", "fetch widget"); res != nil || id != bigID {
+		t.Errorf("big id = %d, res = %v; want %d, nil", id, res, bigID)
+	}
+	if id, res := int64Arg(reqWithArgs(map[string]any{"id": "9007199254740993"}), "id", "fetch widget"); res != nil || id != 9_007_199_254_740_993 {
+		t.Errorf("string id = %d, res = %v; want 9007199254740993, nil", id, res)
+	}
 }

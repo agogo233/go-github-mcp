@@ -99,8 +99,16 @@ func New(cfg *config.Config, client *github.Client, version string) (*mcpserver.
 // read-only mode (write tools) -> GITHUB_TOOLS allow-list -> GITHUB_TOOLSETS.
 func (r *Registrar) Add(toolset string, writable bool, tool mcp.Tool, handler mcpserver.ToolHandlerFunc) {
 	if ok, reason := toolAllowed(r.cfg, toolset, tool.GetName(), writable); !ok {
-		slog.Info("skipping tool excluded by policy",
-			"tool", tool.GetName(), "toolset", toolset, "reason", reason)
+		if slices.Contains(r.cfg.Tools, tool.GetName()) {
+			// The operator explicitly named this tool in GITHUB_TOOLS, yet it is
+			// still excluded (toolset disabled or read-only). A plain info line is
+			// too easy to miss, so escalate to warn and name the reason.
+			slog.Warn("tool listed in GITHUB_TOOLS is excluded by policy",
+				"tool", tool.GetName(), "toolset", toolset, "reason", reason)
+		} else {
+			slog.Info("skipping tool excluded by policy",
+				"tool", tool.GetName(), "toolset", toolset, "reason", reason)
+		}
 		return
 	}
 	r.s.AddTool(tool, handler)
