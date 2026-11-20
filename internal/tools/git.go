@@ -180,12 +180,14 @@ func RegisterGit(r Registrar, client *github.Client) {
 		mcp.WithString("branch", mcp.Required(), mcp.Description("Target branch; must already exist (create it with create_branch first)")),
 		mcp.WithString("message", mcp.Required(), mcp.Description("Commit message")),
 		mcp.WithArray("files", mcp.Required(),
-			mcp.Description("Array of {\"path\": \"file/path.txt\", \"content\": \"full text\"} objects"),
+			mcp.Description("Array of {\"path\": \"file/path.txt\", \"content\": \"full text\"} objects; "+
+				"each path may appear once; optional per-file \"mode\": 100644 (default), 100755 (executable) or 120000 (symlink)"),
 			mcp.Items(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"path":    map[string]any{"type": "string"},
 					"content": map[string]any{"type": "string"},
+					"mode":    map[string]any{"type": "string", "enum": []string{"100644", "100755", "120000"}},
 				},
 				"required": []string{"path", "content"},
 			}),
@@ -220,9 +222,17 @@ func RegisterGit(r Registrar, client *github.Client) {
 type fileEntry struct {
 	Path    string
 	Content string
+	Mode    string
 }
 
-// parseFileEntries extracts the files array from the tool arguments.
+// allowedBlobModes are the git file modes push_files accepts: regular,
+// executable, and symlink entries. Anything else (submodule, tree) is out of
+// scope for a text-content commit tool.
+var allowedBlobModes = map[string]bool{"100644": true, "100755": true, "120000": true}
+
+// parseFileEntries extracts the files array from the tool arguments,
+// defaulting the mode and rejecting duplicate paths with a clear message
+// instead of relying on the API's late, less specific failure.
 func parseFileEntries(req mcp.CallToolRequest) ([]fileEntry, error) {
 	raw, ok := req.GetArguments()["files"]
 	if !ok {
@@ -233,6 +243,7 @@ func parseFileEntries(req mcp.CallToolRequest) ([]fileEntry, error) {
 		return nil, fmt.Errorf("files must be an array of {path, content} objects")
 	}
 	var out []fileEntry
+	seen := map[string]bool{}
 	for i, item := range items {
 		obj, ok := item.(map[string]any)
 		if !ok {
@@ -240,10 +251,21 @@ func parseFileEntries(req mcp.CallToolRequest) ([]fileEntry, error) {
 		}
 		path, _ := obj["path"].(string)
 		content, _ := obj["content"].(string)
+		mode, _ := obj["mode"].(string)
 		if path == "" {
 			return nil, fmt.Errorf("files[%d].path is required", i)
 		}
-		out = append(out, fileEntry{Path: path, Content: content})
+		if mode == "" {
+			mode = "100644"
+		}
+		if !allowedBlobModes[mode] {
+			return nil, fmt.Errorf("files[%d].mode %q is invalid (use 100644, 100755 or 120000)", i, mode)
+		}
+		if seen[path] {
+			return nil, fmt.Errorf("files[%d].path %q appears more than once; each path may be listed once", i, path)
+		}
+		seen[path] = true
+		out = append(out, fileEntry{Path: path, Content: content, Mode: mode})
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("files must contain at least one entry")
@@ -279,7 +301,7 @@ func pushFilesCommit(ctx context.Context, client *github.Client, owner, repo, br
 		}
 		entries = append(entries, &github.TreeEntry{
 			Path: github.Ptr(f.Path),
-			Mode: github.Ptr("100644"),
+			Mode: github.Ptr(f.Mode),
 			Type: github.Ptr("blob"),
 			SHA:  blob.SHA,
 		})

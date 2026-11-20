@@ -45,3 +45,39 @@ func TestGetBlobRejectsOversizedBlob(t *testing.T) {
 		}
 	}
 }
+
+func TestParseFileEntriesDefaultsMode(t *testing.T) {
+	req := reqWithArgs(map[string]any{"files": []any{
+		map[string]any{"path": "a.txt", "content": "x"},
+		map[string]any{"path": "b.sh", "content": "y", "mode": "100755"},
+	}})
+	entries, err := parseFileEntries(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if entries[0].Mode != "100644" {
+		t.Errorf("default mode = %q, want 100644", entries[0].Mode)
+	}
+	if entries[1].Mode != "100755" {
+		t.Errorf("explicit mode = %q, want 100755", entries[1].Mode)
+	}
+}
+
+func TestParseFileEntriesRejectsInvalidMode(t *testing.T) {
+	req := reqWithArgs(map[string]any{"files": []any{
+		map[string]any{"path": "a.txt", "content": "x", "mode": "040000"},
+	}})
+	if _, err := parseFileEntries(req); err == nil || !strings.Contains(err.Error(), "100644") {
+		t.Errorf("expected invalid-mode error naming allowed modes, got %v", err)
+	}
+}
+
+func TestParseFileEntriesRejectsDuplicatePaths(t *testing.T) {
+	req := reqWithArgs(map[string]any{"files": []any{
+		map[string]any{"path": "a.txt", "content": "x"},
+		map[string]any{"path": "a.txt", "content": "y"},
+	}})
+	if _, err := parseFileEntries(req); err == nil || !strings.Contains(err.Error(), "more than once") {
+		t.Errorf("expected duplicate-path error, got %v", err)
+	}
+}
