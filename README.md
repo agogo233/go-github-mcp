@@ -210,6 +210,15 @@ not have those rights.
 `push_files` performs API-based multi-file commits (blob → tree → commit →
 ref update), so no git credentials are ever needed in the container.
 
+### Not provided (by design)
+
+These common write operations deliberately have no tool yet; add them only
+when a real workflow needs them, since every write tool widens what a leaked
+token can do: creating, editing or deleting releases; deleting branches;
+submitting or dismissing pull request reviews; updating repository metadata
+or settings; organization and team management; deleting issues or
+discussions.
+
 ## Development
 
 ```bash
