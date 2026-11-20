@@ -214,6 +214,23 @@ func int64FromArg(req mcp.CallToolRequest, key string) (int64, bool) {
 	}
 }
 
+// intIDArg reads a required integer entity argument (issue/PR numbers,
+// comment and alert IDs) with the same platform-safe parsing as int64Arg,
+// returning an int for the go-github APIs that take entity numbers as int.
+// action names the operation for error messages.
+func intIDArg(req mcp.CallToolRequest, key, action string) (int, *mcp.CallToolResult) {
+	id, ok := int64FromArg(req, key)
+	if !ok {
+		res, _ := errResult(action, fmt.Errorf("argument %q is required and must be an integer ID", key))
+		return 0, res
+	}
+	if id > int64(math.MaxInt) {
+		res, _ := errResult(action, fmt.Errorf("argument %q exceeds the integer range", key))
+		return 0, res
+	}
+	return int(id), nil
+}
+
 // isEmptyArg reports whether an argument is present but empty (empty string
 // or nil), which callers usually treat the same as "not provided".
 func isEmptyArg(v any) bool {

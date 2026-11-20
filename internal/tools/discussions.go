@@ -88,9 +88,9 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("get discussion", err)
 		}
-		number, err := req.RequireInt("discussion_number")
-		if err != nil {
-			return errResult("get discussion", err)
+		number, res := intIDArg(req, "discussion_number", "get discussion")
+		if res != nil {
+			return res, nil
 		}
 		var out any
 		path := fmt.Sprintf("repos/%s/discussions/%d", repoPath(owner, repo), number)
@@ -163,9 +163,9 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("list discussion comments", err)
 		}
-		number, err := req.RequireInt("discussion_number")
-		if err != nil {
-			return errResult("list discussion comments", err)
+		number, res := intIDArg(req, "discussion_number", "list discussion comments")
+		if res != nil {
+			return res, nil
 		}
 		page, perPage := pagination(req)
 		path := fmt.Sprintf("repos/%s/discussions/%d/comments?page=%d&per_page=%d",
@@ -189,9 +189,9 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("add discussion comment", err)
 		}
-		number, err := req.RequireInt("discussion_number")
-		if err != nil {
-			return errResult("add discussion comment", err)
+		number, res := intIDArg(req, "discussion_number", "add discussion comment")
+		if res != nil {
+			return res, nil
 		}
 		body, err := req.RequireString("body")
 		if err != nil {

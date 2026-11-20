@@ -216,9 +216,9 @@ func RegisterDependabot(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("get dependabot alert", err)
 		}
-		number, err := req.RequireInt("alert_number")
-		if err != nil {
-			return errResult("get dependabot alert", err)
+		number, res := intIDArg(req, "alert_number", "get dependabot alert")
+		if res != nil {
+			return res, nil
 		}
 		alert, _, err := client.Dependabot.GetRepoAlert(ctx, owner, repo, number)
 		if err != nil {
@@ -241,9 +241,9 @@ func RegisterDependabot(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("update dependabot alert", err)
 		}
-		number, err := req.RequireInt("alert_number")
-		if err != nil {
-			return errResult("update dependabot alert", err)
+		number, res := intIDArg(req, "alert_number", "update dependabot alert")
+		if res != nil {
+			return res, nil
 		}
 		state, err := req.RequireString("state")
 		if err != nil {

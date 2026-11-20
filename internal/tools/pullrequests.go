@@ -50,9 +50,9 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("get pull request", err)
 		}
-		number, err := req.RequireInt("pull_number")
-		if err != nil {
-			return errResult("get pull request", err)
+		number, res := intIDArg(req, "pull_number", "get pull request")
+		if res != nil {
+			return res, nil
 		}
 		pr, _, err := client.PullRequests.Get(ctx, owner, repo, number)
 		if err != nil {
@@ -118,9 +118,9 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("update pull request", err)
 		}
-		number, err := req.RequireInt("pull_number")
-		if err != nil {
-			return errResult("update pull request", err)
+		number, res := intIDArg(req, "pull_number", "update pull request")
+		if res != nil {
+			return res, nil
 		}
 		patch := &github.PullRequest{}
 		if v := req.GetString("title", ""); v != "" {
@@ -157,9 +157,9 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("merge pull request", err)
 		}
-		number, err := req.RequireInt("pull_number")
-		if err != nil {
-			return errResult("merge pull request", err)
+		number, res := intIDArg(req, "pull_number", "merge pull request")
+		if res != nil {
+			return res, nil
 		}
 		opts := &github.PullRequestOptions{
 			CommitTitle: req.GetString("commit_title", ""),
@@ -183,9 +183,9 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("get pull request files", err)
 		}
-		number, err := req.RequireInt("pull_number")
-		if err != nil {
-			return errResult("get pull request files", err)
+		number, res := intIDArg(req, "pull_number", "get pull request files")
+		if res != nil {
+			return res, nil
 		}
 		files, resp, err := client.PullRequests.ListFiles(ctx, owner, repo, number, listOptions(req))
 		if err != nil {
@@ -205,9 +205,9 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("get pull request reviews", err)
 		}
-		number, err := req.RequireInt("pull_number")
-		if err != nil {
-			return errResult("get pull request reviews", err)
+		number, res := intIDArg(req, "pull_number", "get pull request reviews")
+		if res != nil {
+			return res, nil
 		}
 		reviews, resp, err := client.PullRequests.ListReviews(ctx, owner, repo, number, listOptions(req))
 		if err != nil {
@@ -231,9 +231,9 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("add pull request comment", err)
 		}
-		number, err := req.RequireInt("pull_number")
-		if err != nil {
-			return errResult("add pull request comment", err)
+		number, res := intIDArg(req, "pull_number", "add pull request comment")
+		if res != nil {
+			return res, nil
 		}
 		body, err := req.RequireString("body")
 		if err != nil {
@@ -276,9 +276,9 @@ func RegisterPullRequests(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("get pull request status", err)
 		}
-		number, err := req.RequireInt("pull_number")
-		if err != nil {
-			return errResult("get pull request status", err)
+		number, res := intIDArg(req, "pull_number", "get pull request status")
+		if res != nil {
+			return res, nil
 		}
 		pr, _, err := client.PullRequests.Get(ctx, owner, repo, number)
 		if err != nil {

@@ -60,9 +60,9 @@ func RegisterIssues(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("get issue", err)
 		}
-		number, err := req.RequireInt("issue_number")
-		if err != nil {
-			return errResult("get issue", err)
+		number, res := intIDArg(req, "issue_number", "get issue")
+		if res != nil {
+			return res, nil
 		}
 		issue, _, err := client.Issues.Get(ctx, owner, repo, number)
 		if err != nil {
@@ -138,9 +138,9 @@ func RegisterIssues(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("update issue", err)
 		}
-		number, err := req.RequireInt("issue_number")
-		if err != nil {
-			return errResult("update issue", err)
+		number, res := intIDArg(req, "issue_number", "update issue")
+		if res != nil {
+			return res, nil
 		}
 		issueReq := &github.IssueRequest{}
 		if v := req.GetString("title", ""); v != "" {
@@ -213,9 +213,9 @@ func RegisterIssues(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("add issue comment", err)
 		}
-		number, err := req.RequireInt("issue_number")
-		if err != nil {
-			return errResult("add issue comment", err)
+		number, res := intIDArg(req, "issue_number", "add issue comment")
+		if res != nil {
+			return res, nil
 		}
 		body, err := req.RequireString("body")
 		if err != nil {
@@ -239,9 +239,9 @@ func RegisterIssues(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("list issue comments", err)
 		}
-		number, err := req.RequireInt("issue_number")
-		if err != nil {
-			return errResult("list issue comments", err)
+		number, res := intIDArg(req, "issue_number", "list issue comments")
+		if res != nil {
+			return res, nil
 		}
 		comments, resp, err := client.Issues.ListComments(ctx, owner, repo, number, &github.IssueListCommentsOptions{
 			ListOptions: *listOptions(req),
@@ -334,13 +334,13 @@ func RegisterIssues(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("add sub-issue", err)
 		}
-		parent, err := req.RequireInt("issue_number")
-		if err != nil {
-			return errResult("add sub-issue", err)
+		parent, res := intIDArg(req, "issue_number", "add sub-issue")
+		if res != nil {
+			return res, nil
 		}
-		subNumber, err := req.RequireInt("sub_issue_number")
-		if err != nil {
-			return errResult("add sub-issue", err)
+		subNumber, res := intIDArg(req, "sub_issue_number", "add sub-issue")
+		if res != nil {
+			return res, nil
 		}
 		// The sub-issue API takes the database ID, not the issue number.
 		sub, _, err := client.Issues.Get(ctx, owner, repo, subNumber)
@@ -367,13 +367,13 @@ func RegisterIssues(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("remove sub-issue", err)
 		}
-		parent, err := req.RequireInt("issue_number")
-		if err != nil {
-			return errResult("remove sub-issue", err)
+		parent, res := intIDArg(req, "issue_number", "remove sub-issue")
+		if res != nil {
+			return res, nil
 		}
-		subNumber, err := req.RequireInt("sub_issue_number")
-		if err != nil {
-			return errResult("remove sub-issue", err)
+		subNumber, res := intIDArg(req, "sub_issue_number", "remove sub-issue")
+		if res != nil {
+			return res, nil
 		}
 		sub, _, err := client.Issues.Get(ctx, owner, repo, subNumber)
 		if err != nil {

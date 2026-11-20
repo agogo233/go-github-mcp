@@ -145,9 +145,9 @@ func RegisterLabels(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("add issue labels", err)
 		}
-		number, err := req.RequireInt("issue_number")
-		if err != nil {
-			return errResult("add issue labels", err)
+		number, res := intIDArg(req, "issue_number", "add issue labels")
+		if res != nil {
+			return res, nil
 		}
 		labels := req.GetStringSlice("labels", nil)
 		if len(labels) == 0 {
@@ -171,9 +171,9 @@ func RegisterLabels(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("remove issue label", err)
 		}
-		number, err := req.RequireInt("issue_number")
-		if err != nil {
-			return errResult("remove issue label", err)
+		number, res := intIDArg(req, "issue_number", "remove issue label")
+		if res != nil {
+			return res, nil
 		}
 		label, err := req.RequireString("label")
 		if err != nil {

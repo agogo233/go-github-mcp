@@ -92,9 +92,9 @@ func RegisterProjects(r Registrar, client *github.Client) {
 		if err != nil {
 			return errResult("list project items", err)
 		}
-		number, err := req.RequireInt("project_number")
-		if err != nil {
-			return errResult("list project items", err)
+		number, res := intIDArg(req, "project_number", "list project items")
+		if res != nil {
+			return res, nil
 		}
 		first := req.GetInt("first", 20)
 		if first < 1 {
