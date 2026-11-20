@@ -129,6 +129,51 @@ server once — it reports the authenticated account backing that instance.
 }
 ```
 
+## Configuration examples
+
+A complete single-container setup serving two identities:
+
+```bash
+# .env
+GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_default_xxx   # default/fallback identity
+GITHUB_MCP_AUTH_TOKEN=personal:github_pat_personal_xxx,bot:github_pat_bot_yyy
+MCP_TRANSPORT=http
+HTTP_ADDR=0.0.0.0:8080
+# READ_ONLY=true            # optional: disable every write tool
+# GITHUB_TOOLSETS=default   # optional: trim the tool surface
+```
+
+Verify each identity with `get_me` — the response names the account backing
+the key that was presented:
+
+```bash
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer personal' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_me","arguments":{}}}'
+# -> content carries the "personal" account login
+
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer bot' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_me","arguments":{}}}'
+# -> content carries the "bot" account login
+```
+
+Identity resolution behavior:
+
+| Request | Result |
+|---|---|
+| Valid key (`Bearer personal`) | Handled as the PAT bound to that key; `get_me` reports that account |
+| Unknown or missing key | `401` with a JSON-RPC error body; never falls back to the default PAT |
+| `ALLOW_UNAUTHENTICATED=true` (loopback debugging only) | Missing/unknown key falls back to `GITHUB_PERSONAL_ACCESS_TOKEN` |
+| stdio transport | Always uses `GITHUB_PERSONAL_ACCESS_TOKEN` |
+
+Audit logs record the resolved account as `gh_login` (a public username);
+neither the key nor any PAT is ever logged.
+
 ## Run locally (stdio, e.g. for IDE integrations)
 
 ```bash
