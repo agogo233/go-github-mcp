@@ -9,6 +9,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"strconv"
@@ -143,6 +144,11 @@ func parseFloatEnv(v string, def float64) (float64, error) {
 	f, err := strconv.ParseFloat(v, 64)
 	if err != nil {
 		return 0, fmt.Errorf("invalid number %q (use e.g. 10 or 2.5)", v)
+	}
+	// NaN makes every comparison false (permanent 429) and Inf disables the
+	// limiter silently; both spellings parse as floats, so reject them.
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, fmt.Errorf("invalid number %q (must be finite)", v)
 	}
 	return f, nil
 }

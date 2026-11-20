@@ -54,9 +54,9 @@ If the PAT is ever compromised: revoke it on GitHub, rotate
 | `GITHUB_TOOLS` | no | – | Comma list of individual tool names to **keep**; intersected with the toolsets enabled via `GITHUB_TOOLSETS` (a listed tool whose toolset is not enabled is skipped with a startup warning) |
 | `READ_ONLY` | no | `false` | Skip registration of all write tools |
 | `LOG_LEVEL` | no | `info` | Log verbosity: `debug`, `info`, or `warn`; `debug` also prints one line per skipped tool at startup |
-| `HTTP_RATE_LIMIT` | no | `10` | Sustained `/mcp` requests per second in HTTP mode; `0` disables rate limiting |
+| `HTTP_RATE_LIMIT` | no | `10` | Sustained `/mcp` requests per second in HTTP mode; `0` (or negative) disables rate limiting |
 | `HTTP_RATE_BURST` | no | `20` | Burst allowance on top of the sustained rate |
-| `HTTP_MAX_CONCURRENT` | no | `16` | Max in-flight `/mcp` requests; `0` disables the cap |
+| `HTTP_MAX_CONCURRENT` | no | `16` | Max in-flight `/mcp` POST requests; `0` (or negative) disables the cap. Long-lived GET notification streams are not counted |
 
 ## Agent onboarding
 

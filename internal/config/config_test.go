@@ -218,3 +218,37 @@ func TestIsLoopbackHost(t *testing.T) {
 		}
 	}
 }
+
+func TestParseFloatEnv(t *testing.T) {
+	if v, err := parseFloatEnv("", 10); err != nil || v != 10 {
+		t.Errorf("parseFloatEnv(\"\") = %v, %v; want 10, nil", v, err)
+	}
+	if v, err := parseFloatEnv(" 2.5 ", 10); err != nil || v != 2.5 {
+		t.Errorf("parseFloatEnv(\" 2.5 \") = %v, %v; want 2.5, nil", v, err)
+	}
+	// Negative values are accepted here; the semantics layer treats them as
+	// "limit disabled".
+	if v, err := parseFloatEnv("-1", 10); err != nil || v != -1 {
+		t.Errorf("parseFloatEnv(\"-1\") = %v, %v; want -1, nil", v, err)
+	}
+	for _, bad := range []string{"abc", "NaN", "Inf", "-Inf"} {
+		if _, err := parseFloatEnv(bad, 10); err == nil {
+			t.Errorf("parseFloatEnv(%q) expected error, got nil", bad)
+		}
+	}
+}
+
+func TestParseIntEnv(t *testing.T) {
+	if v, err := parseIntEnv("", 16); err != nil || v != 16 {
+		t.Errorf("parseIntEnv(\"\") = %v, %v; want 16, nil", v, err)
+	}
+	if v, err := parseIntEnv(" 7 ", 16); err != nil || v != 7 {
+		t.Errorf("parseIntEnv(\" 7 \") = %v, %v; want 7, nil", v, err)
+	}
+	if v, err := parseIntEnv("-3", 16); err != nil || v != -3 {
+		t.Errorf("parseIntEnv(\"-3\") = %v, %v; want -3, nil", v, err)
+	}
+	if _, err := parseIntEnv("x", 16); err == nil {
+		t.Error("parseIntEnv(\"x\") expected error, got nil")
+	}
+}
