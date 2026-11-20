@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/agogo233/go-github-mcp/internal/config"
 )
 
 func discardLogs(t *testing.T) {
@@ -262,5 +264,77 @@ func TestAuditLogRecordsToolNameInsideProbeWindowOfLargeBody(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "tool=push_files") {
 		t.Errorf("audit log missing tool name within probe window, got: %s", buf.String())
+	}
+}
+
+func okHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+}
+
+func TestRateLimitMiddleware429(t *testing.T) {
+	cfg := &config.Config{HTTPRateLimit: 2, HTTPRateBurst: 2}
+	handler := rateLimit(okHandler(), cfg)
+
+	// The initial bucket holds burst tokens: the first two requests pass.
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d: status = %d, want 200 (burst admits it)", i+1, rec.Code)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("third request: status = %d, want 429", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("429 must carry a Retry-After header")
+	}
+	if !strings.Contains(rec.Body.String(), "rate limited") {
+		t.Errorf("body should explain throttling, got: %s", rec.Body.String())
+	}
+}
+
+func TestConcurrencyLimitMiddleware503(t *testing.T) {
+	cfg := &config.Config{HTTPMaxConcurrent: 1}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := rateLimit(next, cfg)
+
+	firstDone := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/mcp", nil))
+		close(firstDone)
+	}()
+	<-started // first request now occupies the only slot
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("second concurrent request: status = %d, want 503", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("503 must carry a Retry-After header")
+	}
+
+	close(release)
+	<-firstDone
+}
+
+func TestRateLimitDisabledPassesThrough(t *testing.T) {
+	handler := rateLimit(okHandler(), &config.Config{})
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 when limits are disabled", rec.Code)
 	}
 }

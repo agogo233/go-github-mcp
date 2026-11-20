@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -31,6 +32,12 @@ type Config struct {
 	HTTPAddr             string
 	AuthToken            string // shared secret for HTTP mode
 	AllowUnauthenticated bool   // escape hatch for local HTTP debugging
+
+	// HTTP traffic-shaping limits (HTTP mode only). RateLimit <= 0 or
+	// MaxConcurrent <= 0 disables the respective limit.
+	HTTPRateLimit     float64 // sustained requests per second to /mcp
+	HTTPRateBurst     int     // burst size on top of the sustained rate
+	HTTPMaxConcurrent int     // in-flight /mcp requests allowed at once
 }
 
 // Load reads the environment and returns a validated Config.
@@ -43,6 +50,21 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ALLOW_UNAUTHENTICATED: %w", err)
 	}
+	rateLimit, err := parseFloatEnv(os.Getenv("HTTP_RATE_LIMIT"), 10)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP_RATE_LIMIT: %w", err)
+	}
+	rateBurst, err := parseIntEnv(os.Getenv("HTTP_RATE_BURST"), 20)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP_RATE_BURST: %w", err)
+	}
+	maxConcurrent, err := parseIntEnv(os.Getenv("HTTP_MAX_CONCURRENT"), 16)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP_MAX_CONCURRENT: %w", err)
+	}
+	if rateLimit > 0 && rateBurst < 1 {
+		rateBurst = 1
+	}
 
 	cfg := &Config{
 		GitHubToken:          strings.TrimSpace(os.Getenv("GITHUB_PERSONAL_ACCESS_TOKEN")),
@@ -54,6 +76,9 @@ func Load() (*Config, error) {
 		AllowUnauthenticated: allowUnauthenticated,
 		Toolsets:             parseList(os.Getenv("GITHUB_TOOLSETS")),
 		Tools:                parseList(os.Getenv("GITHUB_TOOLS")),
+		HTTPRateLimit:        rateLimit,
+		HTTPRateBurst:        rateBurst,
+		HTTPMaxConcurrent:    maxConcurrent,
 	}
 
 	if cfg.GitHubToken == "" {
@@ -106,6 +131,33 @@ func parseList(v string) []string {
 		}
 	}
 	return out
+}
+
+// parseFloatEnv parses a float environment value; empty means def. Used for
+// traffic-shaping knobs where zero or a negative value disables the limit.
+func parseFloatEnv(v string, def float64) (float64, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return def, nil
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid number %q (use e.g. 10 or 2.5)", v)
+	}
+	return f, nil
+}
+
+// parseIntEnv parses an int environment value; empty means def.
+func parseIntEnv(v string, def int) (int, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("invalid integer %q", v)
+	}
+	return n, nil
 }
 
 // ParseLogLevel maps the LOG_LEVEL environment value to a slog level.

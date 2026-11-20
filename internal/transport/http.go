@@ -10,11 +10,15 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	mcp "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	"github.com/agogo233/go-github-mcp/internal/config"
@@ -41,11 +45,13 @@ func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config) er
 	mcpMux := http.NewServeMux()
 	mcpMux.Handle(endpointPath, mcpHTTP)
 
-	protected := auditLog(mcpMux)
+	// Traffic shaping sits inside the audit wrapper so throttled requests
+	// still show up in the audit trail with their 429/503 status.
+	var protected http.Handler = auditLog(rateLimit(mcpMux, cfg))
 	if cfg.AuthToken != "" {
 		// Auth wraps audit so unauthenticated requests are rejected before
 		// their body is buffered for tool-name extraction.
-		protected = bearerAuth(auditLog(mcpMux), cfg.AuthToken)
+		protected = bearerAuth(protected, cfg.AuthToken)
 	} else if isLoopbackAddr(cfg.HTTPAddr) {
 		slog.Warn("HTTP authentication disabled via ALLOW_UNAUTHENTICATED; do not expose beyond loopback")
 	} else {
@@ -89,6 +95,94 @@ func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config) er
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)
 	}
+}
+
+// tokenBucket is a minimal dependency-free rate limiter: tokens refill at
+// rate per second up to burst. allow reports whether a token was available
+// and, if not, how long until the next one.
+type tokenBucket struct {
+	mu     sync.Mutex
+	rate   float64
+	burst  float64
+	tokens float64
+	last   time.Time
+}
+
+func newTokenBucket(rate float64, burst int) *tokenBucket {
+	return &tokenBucket{rate: rate, burst: float64(burst), tokens: float64(burst), last: time.Now()}
+}
+
+func (b *tokenBucket) allow(now time.Time) (bool, time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	elapsed := now.Sub(b.last).Seconds()
+	b.last = now
+	b.tokens = min(b.burst, b.tokens+elapsed*b.rate)
+	if b.tokens >= 1 {
+		b.tokens--
+		return true, 0
+	}
+	wait := (1 - b.tokens) / b.rate
+	return false, time.Duration(wait * float64(time.Second))
+}
+
+// rateLimit shapes traffic to the MCP endpoint: a global token bucket bounds
+// the sustained request rate and a semaphore bounds in-flight requests. One
+// shared budget is deliberate: this is a single-tenant service, and the
+// limiter exists so one runaway client cannot exhaust the process or the
+// shared GitHub token. HTTP_RATE_LIMIT <= 0 disables the rate bucket,
+// HTTP_MAX_CONCURRENT <= 0 the concurrency cap.
+func rateLimit(next http.Handler, cfg *config.Config) http.Handler {
+	if cfg.HTTPRateLimit <= 0 && cfg.HTTPMaxConcurrent <= 0 {
+		return next
+	}
+	var bucket *tokenBucket
+	if cfg.HTTPRateLimit > 0 {
+		bucket = newTokenBucket(cfg.HTTPRateLimit, cfg.HTTPRateBurst)
+	}
+	var sem chan struct{}
+	if cfg.HTTPMaxConcurrent > 0 {
+		sem = make(chan struct{}, cfg.HTTPMaxConcurrent)
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if sem != nil {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			default:
+				writeThrottled(w, http.StatusServiceUnavailable, time.Second,
+					"server busy: too many concurrent requests")
+				return
+			}
+		}
+		if bucket != nil {
+			if ok, wait := bucket.allow(time.Now()); !ok {
+				writeThrottled(w, http.StatusTooManyRequests, wait,
+					"rate limited: slow down and retry")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// writeThrottled rejects a request with a JSON-RPC-shaped error body (same
+// shape the MCP transport uses) plus a Retry-After header derived from wait.
+func writeThrottled(w http.ResponseWriter, status int, wait time.Duration, message string) {
+	seconds := int(math.Ceil(wait.Seconds()))
+	if seconds < 1 {
+		seconds = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(seconds))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(mcp.JSONRPCError{
+		JSONRPC: mcp.JSONRPC_VERSION,
+		Error: mcp.JSONRPCErrorDetails{
+			Code:    -32000, // server-defined error
+			Message: message,
+		},
+	})
 }
 
 // bearerAuth enforces "Authorization: Bearer <shared secret>" on every request.
