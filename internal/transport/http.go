@@ -123,6 +123,12 @@ func (b *tokenBucket) allow(now time.Time) (bool, time.Duration) {
 		return true, 0
 	}
 	wait := (1 - b.tokens) / b.rate
+	// Absurdly small rates would overflow the duration conversion below; an
+	// hour of Retry-After is already more than any caller needs to act on.
+	const maxWaitSeconds = float64(time.Hour / time.Second)
+	if wait > maxWaitSeconds {
+		wait = maxWaitSeconds
+	}
 	return false, time.Duration(wait * float64(time.Second))
 }
 
@@ -130,8 +136,10 @@ func (b *tokenBucket) allow(now time.Time) (bool, time.Duration) {
 // the sustained request rate and a semaphore bounds in-flight requests. One
 // shared budget is deliberate: this is a single-tenant service, and the
 // limiter exists so one runaway client cannot exhaust the process or the
-// shared GitHub token. HTTP_RATE_LIMIT <= 0 disables the rate bucket,
-// HTTP_MAX_CONCURRENT <= 0 the concurrency cap.
+// shared GitHub token. The semaphore counts POSTs only: GET /mcp opens
+// long-lived SSE notification streams that would otherwise permanently
+// occupy slots and starve tool calls. HTTP_RATE_LIMIT <= 0 disables the rate
+// bucket, HTTP_MAX_CONCURRENT <= 0 the concurrency cap.
 func rateLimit(next http.Handler, cfg *config.Config) http.Handler {
 	if cfg.HTTPRateLimit <= 0 && cfg.HTTPMaxConcurrent <= 0 {
 		return next
@@ -145,7 +153,7 @@ func rateLimit(next http.Handler, cfg *config.Config) http.Handler {
 		sem = make(chan struct{}, cfg.HTTPMaxConcurrent)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if sem != nil {
+		if sem != nil && r.Method == http.MethodPost {
 			select {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()

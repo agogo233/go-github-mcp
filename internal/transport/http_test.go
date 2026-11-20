@@ -338,3 +338,34 @@ func TestRateLimitDisabledPassesThrough(t *testing.T) {
 		t.Fatalf("status = %d, want 200 when limits are disabled", rec.Code)
 	}
 }
+
+// Long-lived SSE notification streams are GETs and must not occupy
+// concurrency slots, or a few idle streams would starve all tool calls.
+func TestConcurrencyLimitIgnoresGETStreams(t *testing.T) {
+	cfg := &config.Config{HTTPMaxConcurrent: 1}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			close(started)
+			<-release
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := rateLimit(next, cfg)
+
+	firstDone := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/mcp", nil))
+		close(firstDone)
+	}()
+	<-started // POST now occupies the only slot
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/mcp", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET while POST in flight: status = %d, want 200", rec.Code)
+	}
+	close(release)
+	<-firstDone
+}
