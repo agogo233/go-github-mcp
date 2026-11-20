@@ -8,6 +8,11 @@ import (
 	mcp "github.com/mark3labs/mcp-go/mcp"
 )
 
+// maxBlobBytes caps how large a blob get_blob will return. The tool ships
+// blob content through the agent's context, so unbounded sizes would blow up
+// both the process and the conversation; 1 MiB covers source files amply.
+const maxBlobBytes = 1 << 20
+
 // RegisterGit registers the "git" toolset: low-level Git data API operations
 // including API-based multi-file commits (push_files), which remove the need
 // for any git credentials inside the container.
@@ -119,7 +124,8 @@ func RegisterGit(r Registrar, client *github.Client) {
 	})
 
 	getBlob := mcp.NewTool("get_blob",
-		mcp.WithDescription("Get the raw content of a git blob by SHA (works for files of any size)."),
+		mcp.WithDescription("Get the raw content of a git blob by SHA "+
+			"(capped at 1 MiB; larger blobs are rejected with their size)."),
 		withRepoArgs(),
 		mcp.WithString("sha", mcp.Required(), mcp.Description("Blob SHA")),
 	)
@@ -135,6 +141,12 @@ func RegisterGit(r Registrar, client *github.Client) {
 		blob, _, err := client.Git.GetBlob(ctx, owner, repo, sha)
 		if err != nil {
 			return errResult("get blob", err)
+		}
+		if size := blob.GetSize(); size > maxBlobBytes {
+			return mcp.NewToolResultError(fmt.Sprintf(
+				"blob %s is %d bytes, above the %d MiB get_blob limit; "+
+					"locate the file with get_tree and fetch it through a raw download instead",
+				sha, size, maxBlobBytes>>20)), nil
 		}
 		return jsonResult(blob)
 	})
