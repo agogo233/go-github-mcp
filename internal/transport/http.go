@@ -47,7 +47,7 @@ func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config) er
 
 	// Traffic shaping sits inside the audit wrapper so throttled requests
 	// still show up in the audit trail with their 429/503 status.
-	var protected http.Handler = auditLog(rateLimit(mcpMux, cfg))
+	protected := auditLog(rateLimit(mcpMux, cfg))
 	if cfg.AuthToken != "" {
 		// Auth wraps audit so unauthenticated requests are rejected before
 		// their body is buffered for tool-name extraction.
