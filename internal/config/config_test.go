@@ -10,7 +10,7 @@ func setEnv(t *testing.T, kv map[string]string) {
 	t.Helper()
 	for _, k := range []string{
 		"GITHUB_PERSONAL_ACCESS_TOKEN", "GITHUB_HOST", "READ_ONLY",
-		"MCP_TRANSPORT", "HTTP_ADDR", "AUTH_TOKEN", "ALLOW_UNAUTHENTICATED",
+		"MCP_TRANSPORT", "HTTP_ADDR", "GITHUB_MCP_AUTH_TOKEN", "ALLOW_UNAUTHENTICATED",
 		"GITHUB_TOOLSETS", "GITHUB_TOOLS",
 		"HTTP_RATE_LIMIT", "HTTP_RATE_BURST", "HTTP_MAX_CONCURRENT",
 	} {
@@ -42,13 +42,13 @@ func TestLoadStdioDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadHTTPRequiresAuthToken(t *testing.T) {
+func TestLoadHTTPRequiresAuthTokens(t *testing.T) {
 	setEnv(t, map[string]string{
 		"GITHUB_PERSONAL_ACCESS_TOKEN": "t",
 		"MCP_TRANSPORT":                "http",
 	})
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "AUTH_TOKEN") {
-		t.Fatalf("expected AUTH_TOKEN required error, got %v", err)
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "GITHUB_MCP_AUTH_TOKEN") {
+		t.Fatalf("expected GITHUB_MCP_AUTH_TOKEN required error, got %v", err)
 	}
 	// Explicit escape hatch is allowed.
 	setEnv(t, map[string]string{
@@ -65,19 +65,22 @@ func TestLoadHTTPRequiresAuthToken(t *testing.T) {
 	}
 }
 
-func TestLoadHTTPWithAuthToken(t *testing.T) {
+func TestLoadHTTPWithAuthTokens(t *testing.T) {
 	setEnv(t, map[string]string{
 		"GITHUB_PERSONAL_ACCESS_TOKEN": "t",
 		"MCP_TRANSPORT":                "http",
-		"AUTH_TOKEN":                   "s3cret",
+		"GITHUB_MCP_AUTH_TOKEN":        "k1:s3cret",
 		"HTTP_ADDR":                    "127.0.0.1:9090",
 	})
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.HTTPAddr != "127.0.0.1:9090" || cfg.AuthToken != "s3cret" {
-		t.Errorf("cfg = %+v, want addr 127.0.0.1:9090 and token s3cret", cfg)
+	if cfg.HTTPAddr != "127.0.0.1:9090" {
+		t.Errorf("addr = %q, want 127.0.0.1:9090", cfg.HTTPAddr)
+	}
+	if len(cfg.AuthTokens) != 1 || cfg.AuthTokens[0] != (AuthEntry{Key: "k1", PAT: "s3cret"}) {
+		t.Errorf("AuthTokens = %+v, want [{k1 s3cret}]", cfg.AuthTokens)
 	}
 }
 
@@ -116,6 +119,70 @@ func TestParseList(t *testing.T) {
 	}
 	if parseList("") != nil {
 		t.Error("parseList(\"\") should be nil")
+	}
+}
+
+func TestParseAuthTokens(t *testing.T) {
+	if got, err := parseAuthTokens(""); err != nil || got != nil {
+		t.Errorf("parseAuthTokens(\"\") = %v, %v; want nil, nil", got, err)
+	}
+	got, err := parseAuthTokens("k1:pat1, k2:pat2")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []AuthEntry{{Key: "k1", PAT: "pat1"}, {Key: "k2", PAT: "pat2"}}
+	if len(got) != len(want) {
+		t.Fatalf("parseAuthTokens = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("entry %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestParseAuthTokensRejectsInvalid(t *testing.T) {
+	cases := []string{
+		"nocolon",            // missing ":"
+		":pat",               // empty key
+		"key:",               // empty pat
+		"key:pat1,key:pat2",  // duplicate key
+		"bad key:pat",        // space in key
+		"key with colon:pat", // colon in key
+		"key:pat,other",      // malformed second entry
+	}
+	for _, c := range cases {
+		if _, err := parseAuthTokens(c); err == nil {
+			t.Errorf("parseAuthTokens(%q) expected error, got nil", c)
+		}
+	}
+}
+
+func TestParseAuthTokensRejectsBadKeyCharset(t *testing.T) {
+	if _, err := parseAuthTokens("K!9:pat"); err == nil {
+		t.Error("parseAuthTokens(\"K!9:pat\") expected charset error, got nil")
+	}
+	if _, err := parseAuthTokens("abcDEF_-.123:pat"); err != nil {
+		t.Errorf("parseAuthTokens(alnum key) unexpected error: %v", err)
+	}
+}
+
+func TestResolveAuthToken(t *testing.T) {
+	cfg := &Config{AuthTokens: []AuthEntry{
+		{Key: "personal", PAT: "pat_a"},
+		{Key: "bot", PAT: "pat_b"},
+	}}
+	if pat, ok := cfg.ResolveAuthToken("personal"); !ok || pat != "pat_a" {
+		t.Errorf("resolve personal = %q, %v; want pat_a, true", pat, ok)
+	}
+	if pat, ok := cfg.ResolveAuthToken("bot"); !ok || pat != "pat_b" {
+		t.Errorf("resolve bot = %q, %v; want pat_b, true", pat, ok)
+	}
+	if _, ok := cfg.ResolveAuthToken("unknown"); ok {
+		t.Error("resolve unknown should not match")
+	}
+	if _, ok := cfg.ResolveAuthToken(""); ok {
+		t.Error("resolve empty should not match")
 	}
 }
 

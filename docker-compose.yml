@@ -13,7 +13,9 @@ services:
     environment:
       MCP_TRANSPORT: http
       GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_PERSONAL_ACCESS_TOKEN}
-      AUTH_TOKEN: ${AUTH_TOKEN}
+      # Identity mapping: "key:pat" pairs, one per GitHub identity. The MCP
+      # client authenticates with one key (Bearer) and acts as its PAT.
+      GITHUB_MCP_AUTH_TOKEN: ${GITHUB_MCP_AUTH_TOKEN}
       # GITHUB_HOST: ghe.example.com
       # GITHUB_TOOLSETS: default
       # GITHUB_TOOLS: get_me

@@ -1,8 +1,12 @@
 # Multi-identity stack: one container per GitHub identity.
 # Usage: docker compose -f docker-compose.multi.yml up -d
 # Each service reads its own env file (.env / .env.bot) with a distinct
-# GITHUB_PERSONAL_ACCESS_TOKEN and AUTH_TOKEN. Env files hold secrets and are
-# not committed (.gitignore covers .env / .env.*).
+# GITHUB_MCP_AUTH_TOKEN (key:pat pairs) and its own PAT. Env files hold
+# secrets and are not committed (.gitignore covers .env / .env.*).
+#
+# A single container can also serve several identities at once by listing
+# multiple key:pat pairs in one GITHUB_MCP_AUTH_TOKEN value; this stack keeps
+# one identity per container for isolated quotas and simpler rotation.
 x-github-mcp: &github-mcp
   build: .
   # image: ghcr.io/agogo233/go-github-mcp:latest

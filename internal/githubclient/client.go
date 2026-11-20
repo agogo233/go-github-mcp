@@ -18,12 +18,41 @@ import (
 
 const httpTimeout = 30 * time.Second
 
-// New builds a *github.Client from configuration.
+// tokenCtxKey carries the per-request GitHub PAT through the request context.
+// It is set by the HTTP auth middleware and read by tokenInjectTransport when
+// the MCP tool handler's context reaches an outbound GitHub request.
+type tokenCtxKey struct{}
+
+// WithContextToken returns a context carrying the GitHub PAT to use for the
+// API calls that derive from it. Pass the resulting context to go-github
+// methods (or Verify) to act as that identity.
+func WithContextToken(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, tokenCtxKey{}, token)
+}
+
+// TokenFromContext returns the per-request GitHub PAT set by WithContextToken,
+// or "" when none is present.
+func TokenFromContext(ctx context.Context) string {
+	t, _ := ctx.Value(tokenCtxKey{}).(string)
+	return t
+}
+
+// New builds a *github.Client from configuration. The client carries no
+// static PAT: authentication is injected per outbound request by
+// tokenInjectTransport, which reads the PAT from the request context and
+// falls back to the configured default token. This lets a single client serve
+// every identity behind the HTTP transport.
 func New(cfg *config.Config) (*github.Client, error) {
-	httpClient := &http.Client{Timeout: httpTimeout, Transport: retryTransport{base: http.DefaultTransport}}
+	httpClient := &http.Client{
+		Timeout: httpTimeout,
+		Transport: tokenInjectTransport{
+			base:     retryTransport{base: http.DefaultTransport},
+			fallback: cfg.GitHubToken,
+		},
+	}
 
 	if cfg.GitHubHost == "" {
-		return github.NewClient(httpClient).WithAuthToken(cfg.GitHubToken), nil
+		return github.NewClient(httpClient), nil
 	}
 
 	host := cfg.GitHubHost
@@ -40,7 +69,7 @@ func New(cfg *config.Config) (*github.Client, error) {
 	// REST endpoint.
 	switch strings.ToLower(base.Hostname()) {
 	case "github.com", "www.github.com", "api.github.com":
-		return github.NewClient(httpClient).WithAuthToken(cfg.GitHubToken), nil
+		return github.NewClient(httpClient), nil
 	}
 	upload, err := url.Parse(host + "/api/uploads/")
 	if err != nil {
@@ -48,11 +77,7 @@ func New(cfg *config.Config) (*github.Client, error) {
 	}
 	rewriteGheComHost(base)
 	rewriteGheComHost(upload)
-	client, err := github.NewClient(httpClient).WithEnterpriseURLs(base.String(), upload.String())
-	if err != nil {
-		return nil, fmt.Errorf("invalid GITHUB_HOST %q: %w", cfg.GitHubHost, err)
-	}
-	return client.WithAuthToken(cfg.GitHubToken), nil
+	return github.NewClient(httpClient).WithEnterpriseURLs(base.String(), upload.String())
 }
 
 // rewriteGheComHost maps GitHub data-residency hosts (<sub>.ghe.com) to their
@@ -96,6 +121,28 @@ func verifyHint(err error) string {
 		}
 	}
 	return ""
+}
+
+// tokenInjectTransport sets the Authorization header on every outbound
+// request from the GitHub PAT carried in the request context, falling back to
+// the configured default token when the context carries none. Cloning the
+// request before mutation keeps the shared request object safe for reuse.
+type tokenInjectTransport struct {
+	base     http.RoundTripper
+	fallback string // default PAT used when the context carries no token
+}
+
+func (t tokenInjectTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	token := TokenFromContext(req.Context())
+	if token == "" {
+		token = t.fallback
+	}
+	if token == "" {
+		return t.base.RoundTrip(req)
+	}
+	req = req.Clone(req.Context())
+	req.Header.Set("Authorization", "Bearer "+token)
+	return t.base.RoundTrip(req)
 }
 
 // retryTransport retries idempotent GET requests a limited number of times on

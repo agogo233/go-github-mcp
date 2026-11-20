@@ -2,11 +2,15 @@
 //
 // Security notes:
 //   - GITHUB_PERSONAL_ACCESS_TOKEN is required and must never be logged.
-//   - In HTTP mode AUTH_TOKEN (shared secret) is mandatory unless
+//   - GITHUB_MCP_AUTH_TOKEN maps each MCP Bearer secret to the GitHub PAT it
+//     acts as; neither key nor PAT is ever logged.
+//   - In HTTP mode GITHUB_MCP_AUTH_TOKEN is mandatory unless
 //     ALLOW_UNAUTHENTICATED=true is explicitly set (local debugging only).
 package config
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"math"
@@ -21,18 +25,25 @@ const (
 	TransportHTTP  = "http"
 )
 
+// AuthEntry maps one GITHUB_MCP_AUTH_TOKEN value (the secret an MCP client
+// presents as a Bearer token) to the GitHub PAT used for that identity.
+type AuthEntry struct {
+	Key string // MCP Bearer secret; never logged
+	PAT string // GitHub PAT bound to Key; never logged
+}
+
 // Config holds all runtime settings resolved from environment variables.
 type Config struct {
 	GitHubToken string
-	GitHubHost  string   // optional; empty means github.com
-	Toolsets    []string // resolved from GITHUB_TOOLSETS
-	Tools       []string // resolved from GITHUB_TOOLS
+	GitHubHost  string      // optional; empty means github.com
+	AuthTokens  []AuthEntry // resolved from GITHUB_MCP_AUTH_TOKEN
+	Toolsets    []string    // resolved from GITHUB_TOOLSETS
+	Tools       []string    // resolved from GITHUB_TOOLS
 	ReadOnly    bool
 
 	Transport            string // stdio | http
 	HTTPAddr             string
-	AuthToken            string // shared secret for HTTP mode
-	AllowUnauthenticated bool   // escape hatch for local HTTP debugging
+	AllowUnauthenticated bool // escape hatch for local HTTP debugging
 
 	// HTTP traffic-shaping limits (HTTP mode only). RateLimit <= 0 or
 	// MaxConcurrent <= 0 disables the respective limit.
@@ -67,13 +78,18 @@ func Load() (*Config, error) {
 		rateBurst = 1
 	}
 
+	authTokens, err := parseAuthTokens(os.Getenv("GITHUB_MCP_AUTH_TOKEN"))
+	if err != nil {
+		return nil, fmt.Errorf("GITHUB_MCP_AUTH_TOKEN: %w", err)
+	}
+
 	cfg := &Config{
 		GitHubToken:          strings.TrimSpace(os.Getenv("GITHUB_PERSONAL_ACCESS_TOKEN")),
 		GitHubHost:           strings.TrimSpace(os.Getenv("GITHUB_HOST")),
+		AuthTokens:           authTokens,
 		ReadOnly:             readOnly,
 		Transport:            strings.TrimSpace(os.Getenv("MCP_TRANSPORT")),
 		HTTPAddr:             strings.TrimSpace(os.Getenv("HTTP_ADDR")),
-		AuthToken:            strings.TrimSpace(os.Getenv("AUTH_TOKEN")),
 		AllowUnauthenticated: allowUnauthenticated,
 		Toolsets:             parseList(os.Getenv("GITHUB_TOOLSETS")),
 		Tools:                parseList(os.Getenv("GITHUB_TOOLS")),
@@ -101,8 +117,8 @@ func Load() (*Config, error) {
 		if cfg.HTTPAddr == "" {
 			cfg.HTTPAddr = "0.0.0.0:8080"
 		}
-		if cfg.AuthToken == "" && !cfg.AllowUnauthenticated {
-			return nil, fmt.Errorf("AUTH_TOKEN is required in HTTP mode (set ALLOW_UNAUTHENTICATED=true only for local debugging)")
+		if len(cfg.AuthTokens) == 0 && !cfg.AllowUnauthenticated {
+			return nil, fmt.Errorf("GITHUB_MCP_AUTH_TOKEN is required in HTTP mode (set ALLOW_UNAUTHENTICATED=true only for local debugging)")
 		}
 	}
 
@@ -118,6 +134,72 @@ func (c *Config) GitHubHostOrDefault() string {
 		return "github.com"
 	}
 	return c.GitHubHost
+}
+
+// ResolveAuthToken returns the GitHub PAT bound to the MCP Bearer secret key.
+// Comparison uses SHA-256 digests with subtle.ConstantTimeCompare, mirroring
+// the auth middleware's constant-time check so a timing side channel cannot
+// reveal which key (if any) matches. It returns ok=false when key is not one
+// of the configured identities.
+func (c *Config) ResolveAuthToken(key string) (string, bool) {
+	got := sha256.Sum256([]byte(key))
+	for _, e := range c.AuthTokens {
+		want := sha256.Sum256([]byte(e.Key))
+		if subtle.ConstantTimeCompare(got[:], want[:]) == 1 {
+			return e.PAT, true
+		}
+	}
+	return "", false
+}
+
+// parseAuthTokens parses a comma-separated list of "key:pat" pairs mapping
+// each MCP Bearer secret to the GitHub PAT it acts as. Keys must be unique
+// and match a restricted character set; PATs must be non-empty. A pair is
+// split at the first colon so a PAT containing colons stays valid.
+func parseAuthTokens(v string) ([]AuthEntry, error) {
+	if strings.TrimSpace(v) == "" {
+		return nil, nil
+	}
+	seen := make(map[string]bool)
+	var out []AuthEntry
+	for i, part := range strings.Split(v, ",") {
+		key, pat, ok := strings.Cut(strings.TrimSpace(part), ":")
+		key = strings.TrimSpace(key)
+		pat = strings.TrimSpace(pat)
+		// Error messages name the position and shape only; neither the key
+		// nor the PAT value is echoed back, so a malformed variable can never
+		// leak a secret into the startup log.
+		if !ok || key == "" || pat == "" {
+			return nil, fmt.Errorf("entry %d is malformed (want key:pat)", i+1)
+		}
+		if !validAuthKey(key) {
+			return nil, fmt.Errorf("entry %d has an invalid key (want [A-Za-z0-9_.-]{1,128})", i+1)
+		}
+		if seen[key] {
+			return nil, fmt.Errorf("entry %d repeats a key already used by an earlier entry", i+1)
+		}
+		seen[key] = true
+		out = append(out, AuthEntry{Key: key, PAT: pat})
+	}
+	return out, nil
+}
+
+// validAuthKey reports whether k is an acceptable MCP Bearer secret. The
+// restricted character set keeps keys safe for env files and logs (only the
+// key's existence matters to a resolver, never its value).
+func validAuthKey(k string) bool {
+	if len(k) == 0 || len(k) > 128 {
+		return false
+	}
+	for _, r := range k {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '_' || r == '.' || r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // parseList splits a comma-separated env value into trimmed, non-empty items.

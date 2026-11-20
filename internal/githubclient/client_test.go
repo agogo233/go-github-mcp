@@ -1,6 +1,7 @@
 package githubclient
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -127,5 +128,63 @@ func TestRetryTransportBailsOutAfterBudget(t *testing.T) {
 	}
 	if base.calls != 3 { // initial + 2 retries
 		t.Errorf("calls = %d, want 3", base.calls)
+	}
+}
+
+// captureAuthRT records the Authorization header of every request it sees.
+type captureAuthRT struct {
+	header string
+}
+
+func (c *captureAuthRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	c.header = req.Header.Get("Authorization")
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok"))}, nil
+}
+
+func TestTokenInjectTransportUsesContextToken(t *testing.T) {
+	base := &captureAuthRT{}
+	tr := tokenInjectTransport{base: base, fallback: "default-pat"}
+	req := httptest.NewRequest(http.MethodGet, "https://example.com", nil)
+	req = req.WithContext(WithContextToken(req.Context(), "ctx-pat"))
+	if _, err := tr.RoundTrip(req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if base.header != "Bearer ctx-pat" {
+		t.Errorf("Authorization = %q, want %q", base.header, "Bearer ctx-pat")
+	}
+}
+
+func TestTokenInjectTransportFallsBackToDefault(t *testing.T) {
+	base := &captureAuthRT{}
+	tr := tokenInjectTransport{base: base, fallback: "default-pat"}
+	req := httptest.NewRequest(http.MethodGet, "https://example.com", nil)
+	if _, err := tr.RoundTrip(req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if base.header != "Bearer default-pat" {
+		t.Errorf("Authorization = %q, want %q", base.header, "Bearer default-pat")
+	}
+}
+
+func TestTokenInjectTransportClonesRequest(t *testing.T) {
+	base := &captureAuthRT{}
+	tr := tokenInjectTransport{base: base, fallback: "default-pat"}
+	req := httptest.NewRequest(http.MethodGet, "https://example.com", nil)
+	if _, err := tr.RoundTrip(req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The original request must not have been mutated by the transport.
+	if got := req.Header.Get("Authorization"); got != "" {
+		t.Errorf("original request Authorization = %q, want empty (must be cloned)", got)
+	}
+}
+
+func TestTokenFromContext(t *testing.T) {
+	if got := TokenFromContext(context.Background()); got != "" {
+		t.Errorf("TokenFromContext(background) = %q, want empty", got)
+	}
+	ctx := WithContextToken(context.Background(), "tok")
+	if got := TokenFromContext(ctx); got != "tok" {
+		t.Errorf("TokenFromContext = %q, want tok", got)
 	}
 }

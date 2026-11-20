@@ -3,10 +3,10 @@
 [![CI](https://github.com/agogo233/go-github-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/agogo233/go-github-mcp/actions/workflows/ci.yml)
 [![Docker](https://github.com/agogo233/go-github-mcp/actions/workflows/docker.yml/badge.svg)](https://github.com/agogo233/go-github-mcp/actions/workflows/docker.yml)
 
-A single-tenant **GitHub MCP Server** written in Go, shipped as a Docker image.
+A multi-identity **GitHub MCP Server** written in Go, shipped as a Docker image.
 It lets MCP clients (Claude, VS Code, Cursor, OpenCode, custom agents, ...)
 operate on GitHub through the REST/GraphQL APIs while the **personal access
-token (PAT) never leaves the server container**.
+tokens (PATs) never leave the server container**.
 
 > Status: M4 — `stdio` + Streamable `HTTP` transports, config hardening,
 > toolset/read-only policy framework, and 100 tools across 18 toolsets
@@ -16,13 +16,13 @@ token (PAT) never leaves the server container**.
 
 ## Why
 
-- **Team-shared service**: deploy once on an internal server; every teammate's
-  MCP client connects over Streamable HTTP with a shared secret. The GitHub
-  PAT lives only inside the container.
+- **Multi-identity service**: deploy once on an internal server; each client
+  authenticates with its own identity key and acts as the GitHub account bound
+  to it, while all PATs live only inside the container.
 - **Auditable**: every HTTP request is logged with the self-reported
-  `X-Client-Name` header (operational insight, not strong attribution), and
-  tool invocations are logged with the invoked tool name (HTTP-request level,
-  without tool arguments).
+  `X-Client-Name` header (operational insight, not strong attribution), the
+  invoked tool name (HTTP-request level, without tool arguments), and the
+  resolved `gh_login` GitHub account.
 - **Least privilege**: toolsets can be trimmed via `GITHUB_TOOLSETS`, write
   tools can be globally disabled with `READ_ONLY=true`.
 
@@ -30,25 +30,26 @@ token (PAT) never leaves the server container**.
 
 | Layer | Control |
 |---|---|
-| Token storage | PAT injected via environment/secret only; never written to disk, never logged |
-| Client side | MCP clients only know the server URL + shared secret; they never see the PAT |
-| Transport auth | `Authorization: Bearer <AUTH_TOKEN>` enforced on the MCP endpoint `/mcp` only (`/healthz` is unauthenticated); constant-time compare |
-| Startup guard | Token self-check against `/user`; HTTP mode refuses to start without `AUTH_TOKEN` |
+| Token storage | PATs injected via environment/secret only; never written to disk, never logged |
+| Client side | MCP clients only know the server URL + their identity key; they never see any PAT |
+| Transport auth | `Authorization: Bearer <GITHUB_MCP_AUTH_TOKEN key>` enforced on `/mcp` only (`/healthz` is unauthenticated); constant-time compare, one identity per key |
+| Startup guard | Every configured PAT self-checked against `/user`; HTTP mode refuses to start without `GITHUB_MCP_AUTH_TOKEN` |
 | Blast radius | `GITHUB_TOOLSETS` / `GITHUB_TOOLS` allow-list, `READ_ONLY` kill switch for all write tools |
 | GHES | `GITHUB_HOST` must be https (loopback http tolerated for local dev) |
 
-If the PAT is ever compromised: revoke it on GitHub, rotate
-`GITHUB_PERSONAL_ACCESS_TOKEN`, restart the container, and review audit logs.
+If a PAT is ever compromised: revoke it on GitHub, rotate the matching
+`GITHUB_MCP_AUTH_TOKEN` entry (or `GITHUB_PERSONAL_ACCESS_TOKEN`), restart the
+container, and review audit logs.
 
 ## Configuration
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `GITHUB_PERSONAL_ACCESS_TOKEN` | yes | – | GitHub PAT (fine-grained recommended) |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | yes | – | GitHub PAT used for stdio, the `ALLOW_UNAUTHENTICATED` fallback, and startup self-check (fine-grained recommended) |
+| `GITHUB_MCP_AUTH_TOKEN` | http mode | – | Identity map: comma-separated `key:pat` pairs. Each `key` is a Bearer secret a client presents; the bound `pat` is the GitHub identity it acts as. Use strong random keys, e.g. `openssl rand -hex 32` |
 | `MCP_TRANSPORT` | no | `stdio` | `stdio` or `http` |
 | `HTTP_ADDR` | no | `0.0.0.0:8080` | HTTP listen address (HTTP mode); the image `HEALTHCHECK` always probes port 8080, so keep it when changing the address |
-| `AUTH_TOKEN` | http mode | – | Shared secret for Bearer auth (required in HTTP mode); use a strong random value, e.g. `openssl rand -hex 32` |
-| `ALLOW_UNAUTHENTICATED` | no | `false` | Local-debugging escape hatch to skip Bearer auth |
+| `ALLOW_UNAUTHENTICATED` | no | `false` | Local-debugging escape hatch to skip Bearer auth (falls back to `GITHUB_PERSONAL_ACCESS_TOKEN`); ignored when `GITHUB_MCP_AUTH_TOKEN` is set, since configured identities take precedence |
 | `GITHUB_HOST` | no | `github.com` | GHES / ghe.com hostname (https enforced) |
 | `GITHUB_TOOLSETS` | no | `default` | Comma list: `default`, `all`, or named toolsets |
 | `GITHUB_TOOLS` | no | – | Comma list of individual tool names to **keep**; intersected with the toolsets enabled via `GITHUB_TOOLSETS` (a listed tool whose toolset is not enabled is skipped with a startup warning) |
@@ -72,8 +73,9 @@ operators.
 ```bash
 cat > .env <<'EOF'
 GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_xxx
-# replace with a strong random value, e.g. openssl rand -hex 32
-AUTH_TOKEN=change-me-shared-secret
+# key:pat pairs; one identity per key. Use strong random keys,
+# e.g. openssl rand -hex 32
+GITHUB_MCP_AUTH_TOKEN=agent1:github_pat_xxx,agent2:github_pat_yyy
 EOF
 
 docker compose up -d
@@ -82,40 +84,32 @@ curl http://127.0.0.1:8080/healthz   # -> ok
 
 MCP endpoint: `http://<host>:8080/mcp` (Streamable HTTP).
 For LAN/team use, terminate TLS with a reverse proxy (nginx/Caddy) in front.
+Clients authenticate with one `key` from `GITHUB_MCP_AUTH_TOKEN` as their
+Bearer token; the server routes that identity to its bound PAT.
 
 ## Run multiple identities
 
-The server is single-tenant: one container backs exactly one GitHub account.
-To operate several identities (e.g. your personal account plus a bot), run one
-container per identity with its own PAT via `docker-compose.multi.yml`.
+One container can back several GitHub accounts: each `key:pat` pair in
+`GITHUB_MCP_AUTH_TOKEN` is one identity. To operate your personal account plus
+a bot in a single deployment:
 
 ```bash
-# main identity (listens on 127.0.0.1:8080)
 cat > .env <<'EOF'
 GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_main_xxx
-AUTH_TOKEN=change-me-shared-secret
+GITHUB_MCP_AUTH_TOKEN=personal:github_pat_main_xxx,bot:github_pat_bot_yyy
 EOF
 
-# second identity (listens on 127.0.0.1:18081); a different PAT and a
-# DIFFERENT strong AUTH_TOKEN. Make it read-only with READ_ONLY=true if wanted.
-cat > .env.bot <<'EOF'
-GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_bot_xxx
-AUTH_TOKEN=change-me-another-strong-secret
-# READ_ONLY=true
-EOF
-
-docker compose -f docker-compose.multi.yml up -d
-curl http://127.0.0.1:8080/healthz    # -> ok
-curl http://127.0.0.1:18081/healthz   # -> ok
+docker compose up -d
+curl http://127.0.0.1:8080/healthz   # -> ok
 ```
 
-The plain `docker compose up -d` (single-identity) stack is unaffected; use
-`-f docker-compose.multi.yml` when you want both identities side by side.
-Each identity needs its own PAT — one PAT cannot be split across containers.
+The multi-container `docker-compose.multi.yml` stack is still available when
+you prefer one container per identity (isolated GitHub rate-limit budgets,
+independent rotation); each service then sets its own `GITHUB_MCP_AUTH_TOKEN`.
 
 **How clients tell the identities apart.** MCP itself has no identity field,
 so distinction happens in the client config: one `mcpServers` entry per
-identity, with its own name, port and Bearer token. Tools are namespaced by
+identity, with its own name, port and Bearer key. Tools are namespaced by
 entry name (`mcp__github-personal__get_me` vs `mcp__github-bot__get_me`), so
 the agent picks the identity by name. After connecting, call `get_me` on each
 server once — it reports the authenticated account backing that instance.
@@ -125,11 +119,11 @@ server once — it reports the authenticated account backing that instance.
   "mcpServers": {
     "github-personal": {
       "url": "http://your-server:8080/mcp",
-      "headers": { "Authorization": "Bearer <AUTH_TOKEN_1>" }
+      "headers": { "Authorization": "Bearer <key-personal>" }
     },
     "github-bot": {
-      "url": "http://your-server:18081/mcp",
-      "headers": { "Authorization": "Bearer <AUTH_TOKEN_2>" }
+      "url": "http://your-server:8080/mcp",
+      "headers": { "Authorization": "Bearer <key-bot>" }
     }
   }
 }
@@ -140,7 +134,7 @@ server once — it reports the authenticated account backing that instance.
 ```bash
 export GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_xxx
 ./bin/go-github-mcp            # stdio transport
-MCP_TRANSPORT=http AUTH_TOKEN=s3cret ./bin/go-github-mcp   # http transport
+MCP_TRANSPORT=http GITHUB_MCP_AUTH_TOKEN=local:github_pat_xxx ./bin/go-github-mcp   # http transport
 ```
 
 ### Claude Desktop / VS Code / Cursor (stdio)
@@ -166,7 +160,7 @@ MCP_TRANSPORT=http AUTH_TOKEN=s3cret ./bin/go-github-mcp   # http transport
   "mcpServers": {
     "github": {
       "url": "http://your-server:8080/mcp",
-      "headers": { "Authorization": "Bearer <AUTH_TOKEN>", "X-Client-Name": "my-agent" }
+      "headers": { "Authorization": "Bearer <key>", "X-Client-Name": "my-agent" }
     }
   }
 }

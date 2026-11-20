@@ -3,8 +3,6 @@ package transport
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +20,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	"github.com/agogo233/go-github-mcp/internal/config"
+	"github.com/agogo233/go-github-mcp/internal/githubclient"
 )
 
 const (
@@ -35,25 +34,36 @@ const (
 	toolNameProbeLimit = 64 << 10
 )
 
+// ghLoginKey carries the verified GitHub login of the resolved identity in the
+// request context so audit logs can attribute an operation to an account.
+// Only the login (a public username) is recorded; the PAT and the MCP Bearer
+// secret are never logged.
+type ghLoginKey struct{}
+
 // RunHTTP serves MCP over Streamable HTTP with optional Bearer shared-secret
 // authentication, an unauthenticated /healthz probe, and per-client audit
 // logging. WriteTimeout is deliberately zero: the Streamable HTTP transport
 // holds long-lived SSE responses that must not be cut by an absolute deadline.
-func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config) error {
+//
+// logins maps each configured GITHUB_MCP_AUTH_TOKEN key to the GitHub login
+// it was verified against at startup; it feeds the gh_login audit field and
+// may be nil when no identity is configured (ALLOW_UNAUTHENTICATED mode).
+func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config, logins map[string]string) error {
 	mcpHTTP := mcpserver.NewStreamableHTTPServer(s, mcpserver.WithEndpointPath(endpointPath))
 
 	mcpMux := http.NewServeMux()
 	mcpMux.Handle(endpointPath, mcpHTTP)
 
 	// Traffic shaping sits inside the audit wrapper so throttled requests
-	// still show up in the audit trail with their 429/503 status.
-	protected := auditLog(rateLimit(mcpMux, cfg))
-	if cfg.AuthToken != "" {
-		// Auth wraps audit so unauthenticated requests are rejected before
-		// their body is buffered for tool-name extraction.
-		protected = bearerAuth(protected, cfg.AuthToken)
+	// still show up in the audit trail with their 429/503 status. Identity
+	// resolution wraps audit so unauthenticated requests are rejected before
+	// their body is buffered and the resolved login is available to audit.
+	var protected http.Handler = auditLog(rateLimit(mcpMux, cfg))
+	if len(cfg.AuthTokens) > 0 {
+		protected = authResolve(protected, cfg, logins, false)
 	} else if isLoopbackAddr(cfg.HTTPAddr) {
 		slog.Warn("HTTP authentication disabled via ALLOW_UNAUTHENTICATED; do not expose beyond loopback")
+		protected = authResolve(protected, cfg, logins, true)
 	} else {
 		return fmt.Errorf("refusing to start: ALLOW_UNAUTHENTICATED=true with non-loopback listen address %q "+
 			"would expose the GitHub token to anyone who can reach this port", cfg.HTTPAddr)
@@ -193,20 +203,51 @@ func writeThrottled(w http.ResponseWriter, status int, wait time.Duration, messa
 	})
 }
 
-// bearerAuth enforces "Authorization: Bearer <shared secret>" on every request.
-func bearerAuth(next http.Handler, token string) http.Handler {
-	// Compare SHA-256 digests instead of raw bytes: ConstantTimeCompare
-	// returns early on length mismatch, which would leak the secret length.
-	want := sha256.Sum256([]byte(token))
+// authResolve authenticates every request against the configured identities
+// and binds the resolved GitHub PAT to the request context so the shared
+// GitHub client acts as that identity for the duration of the call.
+//
+//   - A valid Bearer key resolves to its PAT; the verified login is recorded
+//     for the audit trail when known.
+//   - allowAnonymous (ALLOW_UNAUTHENTICATED, loopback debugging only) falls
+//     back to the default PAT when the key is missing or unknown, preserving
+//     the pre-identity behavior of an unauthenticated local deployment.
+//   - Otherwise a missing or unknown key is rejected with 401 and a
+//     JSON-RPC-shaped error body before the request is buffered or handled.
+func authResolve(next http.Handler, cfg *config.Config, logins map[string]string, allowAnonymous bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got := bearerToken(r)
-		gotDigest := sha256.Sum256(got)
-		if got == nil || subtle.ConstantTimeCompare(gotDigest[:], want[:]) != 1 {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="go-github-mcp"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		key := bearerToken(r)
+		if key != nil {
+			if pat, ok := cfg.ResolveAuthToken(string(key)); ok {
+				ctx := githubclient.WithContextToken(r.Context(), pat)
+				if login, ok := logins[string(key)]; ok && login != "" {
+					ctx = context.WithValue(ctx, ghLoginKey{}, login)
+				}
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+		}
+		if allowAnonymous {
+			ctx := githubclient.WithContextToken(r.Context(), cfg.GitHubToken)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		next.ServeHTTP(w, r)
+		w.Header().Set("WWW-Authenticate", `Bearer realm="go-github-mcp"`)
+		writeJSONRPCError(w, http.StatusUnauthorized, "unauthorized: unknown or missing MCP auth token")
+	})
+}
+
+// writeJSONRPCError emits a JSON-RPC-shaped error body with the given HTTP
+// status, matching the shape the transport uses for throttled requests.
+func writeJSONRPCError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(mcp.JSONRPCError{
+		JSONRPC: mcp.JSONRPC_VERSION,
+		Error: mcp.JSONRPCErrorDetails{
+			Code:    -32000, // server-defined error
+			Message: message,
+		},
 	})
 }
 
@@ -254,6 +295,9 @@ func auditLog(next http.Handler) http.Handler {
 			}
 			if tool != "" {
 				args = append(args, "tool", tool)
+			}
+			if login, ok := r.Context().Value(ghLoginKey{}).(string); ok && login != "" {
+				args = append(args, "gh_login", login)
 			}
 			slog.Info("http request", args...)
 		}()

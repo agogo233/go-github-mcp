@@ -64,6 +64,23 @@ func main() {
 	}
 	slog.Info("GitHub token self-check passed", "login", login, "host", cfg.GitHubHostOrDefault())
 
+	// Verify every configured identity up front so a revoked or expired PAT
+	// fails fast at startup instead of on the first real call, and record each
+	// login for audit attribution. Neither the PAT nor the MCP Bearer secret
+	// is ever logged.
+	logins := make(map[string]string, len(cfg.AuthTokens))
+	for i, e := range cfg.AuthTokens {
+		identityCtx := githubclient.WithContextToken(ctx, e.PAT)
+		l, err := githubclient.Verify(identityCtx, client)
+		if err != nil {
+			// entry_index is safe to log; the key itself never is.
+			slog.Error("GitHub identity token self-check failed", "entry_index", i+1, "error", err)
+			os.Exit(1)
+		}
+		logins[e.Key] = l
+		slog.Info("GitHub identity self-check passed", "login", l, "host", cfg.GitHubHostOrDefault())
+	}
+
 	mcpServer, err := server.New(cfg, client, version)
 	if err != nil {
 		slog.Error("failed to initialize MCP server", "error", err)
@@ -73,7 +90,7 @@ func main() {
 	switch cfg.Transport {
 	case config.TransportHTTP:
 		slog.Info("starting HTTP transport", "addr", cfg.HTTPAddr, "read_only", cfg.ReadOnly)
-		if err := transport.RunHTTP(ctx, mcpServer, cfg); err != nil {
+		if err := transport.RunHTTP(ctx, mcpServer, cfg, logins); err != nil {
 			slog.Error("HTTP server exited with error", "error", err)
 			os.Exit(1)
 		}

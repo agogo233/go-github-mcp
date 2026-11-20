@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/agogo233/go-github-mcp/internal/config"
+	"github.com/agogo233/go-github-mcp/internal/githubclient"
 )
 
 func discardLogs(t *testing.T) {
@@ -56,23 +58,37 @@ func TestStatusWriterCapturesStatus(t *testing.T) {
 	}
 }
 
-func TestBearerAuth(t *testing.T) {
-	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+func TestAuthResolveRoutesIdentity(t *testing.T) {
+	cfg := &config.Config{
+		GitHubToken: "default-pat",
+		AuthTokens: []config.AuthEntry{
+			{Key: "agent1", PAT: "pat_one"},
+			{Key: "agent2", PAT: "pat_two"},
+		},
+	}
+	logins := map[string]string{"agent1": "alice", "agent2": "bob"}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tok := githubclient.TokenFromContext(r.Context())
+		if tok == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(tok))
 	})
-	handler := bearerAuth(next, "s3cret")
+	handler := authResolve(next, cfg, logins, false)
 
 	tests := []struct {
 		name   string
 		header string
 		want   int
+		body   string
 	}{
-		{"missing header", "", http.StatusUnauthorized},
-		{"wrong token", "Bearer nope", http.StatusUnauthorized},
-		{"shorter token", "Bearer s", http.StatusUnauthorized},
-		{"longer token", "Bearer s3cret-and-more", http.StatusUnauthorized},
-		{"correct token", "Bearer s3cret", http.StatusOK},
-		{"case-insensitive scheme", "bearer s3cret", http.StatusOK},
+		{"missing header", "", http.StatusUnauthorized, ""},
+		{"wrong token", "Bearer nope", http.StatusUnauthorized, ""},
+		{"correct agent1", "Bearer agent1", http.StatusOK, "pat_one"},
+		{"correct agent2", "Bearer agent2", http.StatusOK, "pat_two"},
+		{"case-insensitive scheme", "bearer agent1", http.StatusOK, "pat_one"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -85,7 +101,49 @@ func TestBearerAuth(t *testing.T) {
 			if rec.Code != tt.want {
 				t.Errorf("status = %d, want %d", rec.Code, tt.want)
 			}
+			if tt.body != "" && rec.Body.String() != tt.body {
+				t.Errorf("body = %q, want %q", rec.Body.String(), tt.body)
+			}
 		})
+	}
+}
+
+func TestAuthResolveAnonymousFallback(t *testing.T) {
+	cfg := &config.Config{GitHubToken: "default-pat"}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if tok := githubclient.TokenFromContext(r.Context()); tok != "default-pat" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := authResolve(next, cfg, nil, true)
+
+	for _, h := range []string{"", "Bearer nope"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+		if h != "" {
+			req.Header.Set("Authorization", h)
+		}
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("header %q: status = %d, want 200 (anonymous fallback)", h, rec.Code)
+		}
+	}
+}
+
+func TestAuthResolveRejectsWhenAnonymousDisabled(t *testing.T) {
+	cfg := &config.Config{GitHubToken: "default-pat", AuthTokens: []config.AuthEntry{{Key: "k", PAT: "p"}}}
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	handler := authResolve(next, cfg, nil, false)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous request without escape hatch: status = %d, want 401", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "unauthorized") {
+		t.Errorf("401 body should be JSON-RPC-shaped, got: %s", rec.Body.String())
 	}
 }
 
@@ -180,6 +238,47 @@ func TestAuditLogOmitsToolNameForNonToolCalls(t *testing.T) {
 
 	if strings.Contains(buf.String(), "tool=") {
 		t.Errorf("initialize must not be logged as a tool call, got: %s", buf.String())
+	}
+}
+
+func TestAuditLogRecordsGithubLogin(t *testing.T) {
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	ctx := context.WithValue(context.Background(), ghLoginKey{}, "alice")
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil).WithContext(ctx)
+	auditLog(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(httptest.NewRecorder(), req)
+
+	if !strings.Contains(buf.String(), "gh_login=alice") {
+		t.Errorf("audit log missing gh_login, got: %s", buf.String())
+	}
+}
+
+// authResolve must bind the verified login into the request context so the
+// audit wrapper (which runs inside it) can attribute the call to an account.
+func TestAuthResolveWritesLoginToContext(t *testing.T) {
+	cfg := &config.Config{AuthTokens: []config.AuthEntry{{Key: "agent1", PAT: "pat_one"}}}
+	logins := map[string]string{"agent1": "alice"}
+	var gotLogin string
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if l, ok := r.Context().Value(ghLoginKey{}).(string); ok {
+			gotLogin = l
+		}
+	})
+	handler := authResolve(next, cfg, logins, false)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer agent1")
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if gotLogin != "alice" {
+		t.Errorf("resolved login in ctx = %q, want alice", gotLogin)
 	}
 }
 
