@@ -29,6 +29,7 @@ const discussionCategoriesQuery = `
 query($owner:String!, $repo:String!) {
   repository(owner:$owner, name:$repo) {
     discussionCategories(first: 50) {
+      pageInfo { hasNextPage }
       nodes { id name description emoji isAnswerable }
     }
   }
@@ -208,7 +209,8 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 
 	listDiscussionCategories := mcp.NewTool("list_discussion_categories",
 		mcp.WithDescription("List discussion categories of a repository via GraphQL; "+
-			"the returned id is a GraphQL node ID usable with create_discussion."),
+			"the returned id is a GraphQL node ID usable with create_discussion. "+
+			"Returns at most the first 50 categories; pageInfo.hasNextPage in the result signals more exist."),
 		withRepoArgs(),
 	)
 	r.Add("discussions", false, listDiscussionCategories, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

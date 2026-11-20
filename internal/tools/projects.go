@@ -27,6 +27,7 @@ const listProjectsQuery = `
 query($owner:String!, $repo:String!) {
   repository(owner:$owner, name:$repo) {
     projectsV2(first: 50) {
+      pageInfo { hasNextPage }
       nodes { id title number url closed }
     }
   }
@@ -64,7 +65,8 @@ query($owner:String!, $repo:String!, $number:Int!, $first:Int!) {
 // RegisterProjects registers the "projects" toolset (Projects v2, GraphQL).
 func RegisterProjects(r Registrar, client *github.Client) {
 	listProjects := mcp.NewTool("list_projects",
-		mcp.WithDescription("List Projects v2 of a repository (GitHub.com; Projects v2 uses the GraphQL API)."),
+		mcp.WithDescription("List Projects v2 of a repository (GitHub.com; Projects v2 uses the GraphQL API). "+
+			"Returns at most the first 50 projects; pageInfo.hasNextPage in the result signals more exist."),
 		withRepoArgs(),
 	)
 	r.Add("projects", false, listProjects, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
