@@ -58,7 +58,7 @@ func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config, lo
 	// still show up in the audit trail with their 429/503 status. Identity
 	// resolution wraps audit so unauthenticated requests are rejected before
 	// their body is buffered and the resolved login is available to audit.
-	var protected http.Handler = auditLog(rateLimit(mcpMux, cfg))
+	protected := auditLog(rateLimit(mcpMux, cfg))
 	if len(cfg.AuthTokens) > 0 {
 		protected = authResolve(protected, cfg, logins, false)
 	} else if isLoopbackAddr(cfg.HTTPAddr) {
