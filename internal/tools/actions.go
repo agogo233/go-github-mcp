@@ -15,8 +15,17 @@ import (
 
 // logHTTPClient fetches pre-signed workflow log URLs. These URLs are served
 // from GitHub's log hosts and are pre-authorized, so this client must NOT
-// carry the GitHub token.
-var logHTTPClient = &http.Client{Timeout: 30 * time.Second}
+// carry the GitHub token. Redirects are capped well below net/http's default
+// of 10 so a hijacked or misconfigured URL cannot be walked far off-host.
+var logHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+	CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return fmt.Errorf("stopped after %d redirects", len(via))
+		}
+		return nil
+	},
+}
 
 // maxLogBytes caps how much log content is read into memory per job.
 const maxLogBytes = 5 << 20

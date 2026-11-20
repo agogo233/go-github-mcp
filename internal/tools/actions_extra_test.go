@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -314,5 +315,24 @@ func TestListWorkflowRunsOmitsHeadSHAByDefault(t *testing.T) {
 	}
 	if strings.Contains(rawQuery, "head_sha") {
 		t.Errorf("head_sha must not be sent when omitted, query: %s", rawQuery)
+	}
+}
+
+// Redirect chains are capped: a looping (or hijacked) log URL must fail fast
+// instead of following net/http's default ten hops.
+func TestFetchLogContentRejectsRedirectLoops(t *testing.T) {
+	var calls int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		http.Redirect(w, r, "/next", http.StatusFound)
+	}))
+	defer ts.Close()
+
+	_, _, err := fetchLogContent(context.Background(), ts.URL, 10)
+	if err == nil {
+		t.Fatal("expected the redirect loop to be rejected")
+	}
+	if calls > 4 {
+		t.Errorf("followed %d requests, want at most initial + 3 redirects", calls)
 	}
 }
