@@ -46,8 +46,9 @@ container, and review audit logs.
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | yes | – | GitHub PAT used for stdio, the `ALLOW_UNAUTHENTICATED` fallback, and startup self-check (fine-grained recommended) |
-| `GITHUB_MCP_AUTH_TOKEN` | http mode | – | Identity map: comma-separated `key:pat` pairs. Each `key` is a Bearer secret a client presents; the bound `pat` is the GitHub identity it acts as. Use strong random keys, e.g. `openssl rand -hex 32` |
-| `MCP_TRANSPORT` | no | `stdio` | `stdio` or `http` |
+| `MCP_AUTH_MODE` | no | `identity` | `identity`: the Bearer key selects the PAT. `owner`: one shared Bearer secret for all callers; the tool call's `owner` argument selects the PAT (see [Owner-based routing](#owner-based-routing)) |
+| `GITHUB_MCP_AUTH_TOKEN` | http mode | – | `identity` mode: comma-separated `key:pat` pairs, one identity per key. `owner` mode: a single shared secret for all callers. Use strong random values, e.g. `openssl rand -hex 32` |
+| `GITHUB_OWNER_TOKENS` | owner mode | – | Comma-separated `owner:pat` pairs mapping a repository owner (user/org login, case-insensitive) to the PAT used for its calls; the same owner may repeat with different PATs to spread rate limits |
 | `HTTP_ADDR` | no | `0.0.0.0:8080` | HTTP listen address (HTTP mode); the image `HEALTHCHECK` always probes port 8080, so keep it when changing the address |
 | `ALLOW_UNAUTHENTICATED` | no | `false` | Local-debugging escape hatch to skip Bearer auth (falls back to `GITHUB_PERSONAL_ACCESS_TOKEN`); ignored when `GITHUB_MCP_AUTH_TOKEN` is set, since configured identities take precedence |
 | `GITHUB_HOST` | no | `github.com` | GHES / ghe.com hostname (https enforced) |
@@ -173,6 +174,54 @@ Identity resolution behavior:
 
 Audit logs record the resolved account as `gh_login` (a public username);
 neither the key nor any PAT is ever logged.
+
+## Owner-based routing
+
+For an internal, team-shared gateway, `MCP_AUTH_MODE=owner` removes the need
+to hand out one key per caller: every client shares a single MCP token, and
+the **repository owner argument** of each tool call selects the GitHub PAT.
+Unmatched owners fall back to a random PAT from the routing table, which
+spreads GitHub rate limits across the configured tokens.
+
+```bash
+# .env
+GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_default_xxx   # stdio, self-check, debug fallback
+MCP_AUTH_MODE=owner
+GITHUB_MCP_AUTH_TOKEN=op-kX9f2mQ7vLw4                 # one shared secret for all callers
+GITHUB_OWNER_TOKENS=alice:github_pat_aliceA,alice:github_pat_aliceB,myorg:github_pat_orgC
+MCP_TRANSPORT=http
+```
+
+All clients authenticate with the same Bearer token:
+
+```bash
+curl -s http://127.0.0.1:8080/mcp \
+  -H 'Authorization: Bearer op-kX9f2mQ7vLw4' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_issue","arguments":{"owner":"alice","repo":"demo","number":1}}}'
+# -> handled with one of alice's PATs
+```
+
+Routing behavior:
+
+| Tool call | PAT used | `routed_by` |
+|---|---|---|
+| `owner=alice` | one of alice's PATs, chosen at random | `owner` |
+| `owner=myorg` | myorg's PAT | `owner` |
+| Unconfigured owner | random PAT from `GITHUB_OWNER_TOKENS` | `random` |
+| No `owner` argument (`get_me`, global `search_*`) | random PAT from `GITHUB_OWNER_TOKENS` | `random` |
+
+Owner matching is case-insensitive (GitHub logins are too). Every PAT in the
+routing table is self-checked against `/user` at startup; a revoked PAT fails
+fast instead of surfacing on the first call. Audit logs record the routing
+decision (`routed_by`, `owner`) plus the account actually used (`gh_login`).
+
+**Trust model.** One shared token means every holder can act as **any**
+configured identity simply by naming its owner in the tool arguments — GitHub
+still enforces what each PAT may access, but the per-caller isolation of
+identity mode is gone. Use this mode only for trusted callers on an internal
+network, behind TLS; rotate the shared token like any other secret.
 
 ## Run locally (stdio, e.g. for IDE integrations)
 
