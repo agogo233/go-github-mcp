@@ -16,6 +16,11 @@ services:
       # Identity mapping: "key:pat" pairs, one per GitHub identity. The MCP
       # client authenticates with one key (Bearer) and acts as its PAT.
       GITHUB_MCP_AUTH_TOKEN: ${GITHUB_MCP_AUTH_TOKEN}
+      # Owner-based routing (MCP_AUTH_MODE=owner): the shared Bearer secret
+      # above plus an owner -> PAT routing table. See README
+      # "Owner-based routing". Unset variables fall back to identity mode.
+      MCP_AUTH_MODE: ${MCP_AUTH_MODE}
+      GITHUB_OWNER_TOKENS: ${GITHUB_OWNER_TOKENS}
       # GITHUB_HOST: ghe.example.com
       # GITHUB_TOOLSETS: default
       # GITHUB_TOOLS: get_me
