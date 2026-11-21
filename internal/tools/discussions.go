@@ -64,9 +64,7 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 		// Whitelist state before interpolating into the query string so a
 		// hostile value cannot inject extra query parameters.
 		state := req.GetString("state", "all")
-		switch state {
-		case "open", "closed", "all":
-		default:
+		if !validState(state, "open", "closed", "all") {
 			return errResult("list discussions", fmt.Errorf("invalid state %q (use open, closed or all)", state))
 		}
 		path := fmt.Sprintf("repos/%s/discussions?state=%s&page=%d&per_page=%d",
@@ -127,23 +125,22 @@ func RegisterDiscussions(r Registrar, client *github.Client) {
 			return errResult("create discussion", err)
 		}
 		// The mutation needs the repository's GraphQL node ID; resolve it first.
+		// graphqlQuery unwraps the envelope, so out receives the data payload.
 		var repoOut struct {
-			Data struct {
-				Repository struct {
-					ID string `json:"id"`
-				} `json:"repository"`
-			} `json:"data"`
+			Repository struct {
+				ID string `json:"id"`
+			} `json:"repository"`
 		}
 		if err := graphqlQuery(ctx, client, repositoryIdQuery,
 			map[string]any{"owner": owner, "repo": repo}, &repoOut); err != nil {
 			return errResult("create discussion (resolve repository)", err)
 		}
-		if repoOut.Data.Repository.ID == "" {
+		if repoOut.Repository.ID == "" {
 			return errResult("create discussion", fmt.Errorf("repository %s/%s not found via GraphQL", owner, repo))
 		}
 		var out any
 		if err := graphqlQuery(ctx, client, createDiscussionMutation, map[string]any{
-			"repoId":     repoOut.Data.Repository.ID,
+			"repoId":     repoOut.Repository.ID,
 			"categoryId": categoryID,
 			"title":      title,
 			"body":       body,

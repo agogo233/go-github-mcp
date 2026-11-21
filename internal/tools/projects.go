@@ -2,6 +2,10 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/google/go-github/v72/github"
 	mcp "github.com/mark3labs/mcp-go/mcp"
@@ -11,6 +15,14 @@ import (
 // These tools POST hand-crafted GraphQL queries through the shared client.
 // Note: the GraphQL endpoint path differs on GHES, so these tools target
 // github.com (and ghe.com data-residency hosts) in practice.
+//
+// graphqlQuery unwraps the standard GraphQL envelope: transport-level
+// failures surface as errors from client.Do, while GraphQL-level failures
+// arrive as HTTP 200 with a non-empty "errors" array and would otherwise be
+// reported as successful tool calls. Any errors — including partial ones
+// returned alongside data — are converted into a Go error so handlers can
+// emit a failed tool result. On success the "data" payload is decoded into
+// out (callers no longer see the envelope wrapper).
 func graphqlQuery(ctx context.Context, client *github.Client, query string, variables map[string]any, out any) error {
 	req, err := client.NewRequest("POST", "graphql", map[string]any{
 		"query":     query,
@@ -19,8 +31,31 @@ func graphqlQuery(ctx context.Context, client *github.Client, query string, vari
 	if err != nil {
 		return err
 	}
-	_, err = client.Do(ctx, req, out)
-	return err
+	var envelope struct {
+		Data   json.RawMessage `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if _, err := client.Do(ctx, req, &envelope); err != nil {
+		return err
+	}
+	if len(envelope.Errors) > 0 {
+		msgs := make([]string, 0, len(envelope.Errors))
+		for _, e := range envelope.Errors {
+			if e.Message != "" {
+				msgs = append(msgs, e.Message)
+			}
+		}
+		if len(msgs) == 0 {
+			return errors.New("graphql request failed")
+		}
+		return fmt.Errorf("graphql error: %s", strings.Join(msgs, "; "))
+	}
+	if out == nil || len(envelope.Data) == 0 {
+		return nil
+	}
+	return json.Unmarshal(envelope.Data, out)
 }
 
 const listProjectsQuery = `
