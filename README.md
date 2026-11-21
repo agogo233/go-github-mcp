@@ -60,6 +60,14 @@ container, and review audit logs.
 | `HTTP_RATE_BURST` | no | `20` | Burst allowance on top of the sustained rate |
 | `HTTP_MAX_CONCURRENT` | no | `16` | Max in-flight `/mcp` POST requests; `0` (or negative) disables the cap. Long-lived GET notification streams are not counted |
 
+In addition to the knobs above, repeated authentication failures are
+throttled per source IP: after 20 `401` responses from one address, further
+requests from it are rejected with `429` for one minute, so bearer keys
+cannot be probed at full speed. This brute-force guard has no environment
+knob; successful authentication decays the failure counter instead of
+clearing it, and the counter survives the block window so a source that
+resumes guessing is re-blocked immediately.
+
 ## Agent onboarding
 
 Agents get usage guidance for free: the server returns `instructions` in the
@@ -172,8 +180,10 @@ Identity resolution behavior:
 | `ALLOW_UNAUTHENTICATED=true` (loopback debugging only) | Missing/unknown key falls back to `GITHUB_PERSONAL_ACCESS_TOKEN` |
 | stdio transport | Always uses `GITHUB_PERSONAL_ACCESS_TOKEN` |
 
-Audit logs record the resolved account as `gh_login` (a public username);
-neither the key nor any PAT is ever logged.
+Audit logs record the resolved account as `gh_login` (a public username) —
+including requests served via the `ALLOW_UNAUTHENTICATED` fallback, which
+are attributed to the default PAT's account; neither the key nor any PAT is
+ever logged.
 
 ## Owner-based routing
 
@@ -318,7 +328,9 @@ make docker   # local image build
 
 CI runs lint + tests + build on pushes and PRs that touch Go code or CI
 configuration, and publishes the image to
-`ghcr.io/agogo233/go-github-mcp` on `main` pushes and `v*` tags.
+`ghcr.io/agogo233/go-github-mcp` on `main` pushes (tag `latest`) and `v*`
+tags, which additionally publish pinable version tags such as `1.2.3` and
+`1.2` for a `v1.2.3` release.
 
 A manual **Smoke** workflow (`workflow_dispatch`) runs the built binary
 end-to-end against the real GitHub API with read-only calls only (stdio
