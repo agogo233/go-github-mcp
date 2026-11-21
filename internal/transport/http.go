@@ -62,6 +62,10 @@ func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config, lo
 	mcpMux := http.NewServeMux()
 	mcpMux.Handle(endpointPath, mcpHTTP)
 
+	// The default PAT's verified login attributes the ALLOW_UNAUTHENTICATED
+	// fallback in audit logs; empty when unknown.
+	defaultLogin := patLogins[cfg.GitHubToken]
+
 	// Traffic shaping sits inside the audit wrapper so throttled requests
 	// still show up in the audit trail with their 429/503 status. Identity
 	// resolution wraps audit so unauthenticated requests are rejected before
@@ -80,14 +84,19 @@ func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config, lo
 				"would expose the GitHub token to anyone who can reach this port", cfg.HTTPAddr)
 		}
 	} else if len(cfg.AuthTokens) > 0 {
-		protected = authResolve(protected, cfg, logins, false)
+		protected = authResolve(protected, cfg, logins, defaultLogin, false)
 	} else if isLoopbackAddr(cfg.HTTPAddr) {
 		slog.Warn("HTTP authentication disabled via ALLOW_UNAUTHENTICATED; do not expose beyond loopback")
-		protected = authResolve(protected, cfg, logins, true)
+		protected = authResolve(protected, cfg, logins, defaultLogin, true)
 	} else {
 		return fmt.Errorf("refusing to start: ALLOW_UNAUTHENTICATED=true with non-loopback listen address %q "+
 			"would expose the GitHub token to anyone who can reach this port", cfg.HTTPAddr)
 	}
+
+	// Repeated authentication failures are throttled per source IP outside
+	// the auth middleware, so a blocked source is rejected before it can
+	// present another guess.
+	protected = authFailGuard(protected)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -223,6 +232,93 @@ func writeThrottled(w http.ResponseWriter, status int, wait time.Duration, messa
 	})
 }
 
+// Repeated authentication failures are throttled per remote IP: after too
+// many 401 responses the source is blocked for a short window, so a caller
+// cannot probe bearer keys at full speed. The guard sits OUTSIDE the auth
+// middleware — which would otherwise reject an unknown key with 401 before
+// any block check could run — and counts only 401s; any other outcome clears
+// the IP's counter so one noisy user behind a shared NAT gateway is not
+// poisoned by another. Fixed constants keep the behavior predictable, and
+// the map is capped so a flood of rotating source addresses cannot grow
+// memory without bound. Sources behind a shared proxy share one bucket; this
+// protection targets direct, single-tenant deployments like the audit field
+// it mirrors.
+const (
+	authFailThreshold   = 20          // 401s before the source is blocked
+	authFailBlockWindow = time.Minute // how long a blocked source stays blocked
+	authFailMaxEntries  = 4096        // map size bound; reset when exceeded
+)
+
+type authFailEntry struct {
+	fails        int
+	blockedUntil time.Time
+}
+
+func authFailGuard(next http.Handler) http.Handler {
+	var mu sync.Mutex
+	entries := make(map[string]*authFailEntry)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := remoteIP(r)
+		now := time.Now()
+		mu.Lock()
+		if e, ok := entries[ip]; ok && now.Before(e.blockedUntil) {
+			wait := e.blockedUntil.Sub(now)
+			mu.Unlock()
+			writeThrottled(w, http.StatusTooManyRequests, wait,
+				"too many failed authentication attempts; retry later")
+			return
+		}
+		mu.Unlock()
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(sw, r)
+		mu.Lock()
+		defer mu.Unlock()
+		if sw.status != http.StatusUnauthorized {
+			// Decay instead of clearing: one successful request — possibly
+			// made with a different valid key on a multi-identity deployment —
+			// must not wash out a sustained guessing campaign from the same
+			// source. Halving keeps occasional successes by unrelated users
+			// behind a NAT from compounding into a lockout, while a persistent
+			// failure stream still crosses the threshold.
+			if e := entries[ip]; e != nil {
+				e.fails /= 2
+				if e.fails == 0 {
+					delete(entries, ip)
+				}
+			}
+			return
+		}
+		if len(entries) >= authFailMaxEntries {
+			// Bound memory under a flood of rotating sources, keeping active
+			// blocks so the reset cannot unban a source mid-window.
+			kept := make(map[string]*authFailEntry, len(entries))
+			for k, e := range entries {
+				if now.Before(e.blockedUntil) {
+					kept[k] = e
+				}
+			}
+			entries = kept
+		}
+		e := entries[ip]
+		if e == nil {
+			e = &authFailEntry{}
+			entries[ip] = e
+		}
+		e.fails++
+		if e.fails >= authFailThreshold {
+			// The counter intentionally survives the block window, so a
+			// source that resumes guessing is re-blocked immediately. The
+			// window starts now, after the request has been handled, not at
+			// the moment the failing request arrived.
+			e.blockedUntil = time.Now().Add(authFailBlockWindow)
+			if e.fails == authFailThreshold {
+				slog.Warn("authentication failures exceeded threshold; blocking source",
+					"remote", ip, "window", authFailBlockWindow.String())
+			}
+		}
+	})
+}
+
 // authResolve authenticates every request against the configured identities
 // and binds the resolved GitHub PAT to the request context so the shared
 // GitHub client acts as that identity for the duration of the call.
@@ -232,9 +328,11 @@ func writeThrottled(w http.ResponseWriter, status int, wait time.Duration, messa
 //   - allowAnonymous (ALLOW_UNAUTHENTICATED, loopback debugging only) falls
 //     back to the default PAT when the key is missing or unknown, preserving
 //     the pre-identity behavior of an unauthenticated local deployment.
+//     defaultLogin is the verified login of that default PAT so the fallback
+//     stays attributable in audit logs.
 //   - Otherwise a missing or unknown key is rejected with 401 and a
 //     JSON-RPC-shaped error body before the request is buffered or handled.
-func authResolve(next http.Handler, cfg *config.Config, logins map[string]string, allowAnonymous bool) http.Handler {
+func authResolve(next http.Handler, cfg *config.Config, logins map[string]string, defaultLogin string, allowAnonymous bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := bearerToken(r)
 		if key != nil {
@@ -249,6 +347,9 @@ func authResolve(next http.Handler, cfg *config.Config, logins map[string]string
 		}
 		if allowAnonymous {
 			ctx := githubclient.WithContextToken(r.Context(), cfg.GitHubToken)
+			if defaultLogin != "" {
+				ctx = context.WithValue(ctx, ghLoginKey{}, defaultLogin)
+			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}

@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -76,7 +77,7 @@ func TestAuthResolveRoutesIdentity(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(tok))
 	})
-	handler := authResolve(next, cfg, logins, false)
+	handler := authResolve(next, cfg, logins, "", false)
 
 	tests := []struct {
 		name   string
@@ -115,9 +116,15 @@ func TestAuthResolveAnonymousFallback(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		// The default PAT's verified login must be attributed in the
+		// request context so audit logs can name the account used.
+		if l, _ := r.Context().Value(ghLoginKey{}).(string); l != "default-login" {
+			w.WriteHeader(http.StatusExpectationFailed)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := authResolve(next, cfg, nil, true)
+	handler := authResolve(next, cfg, nil, "default-login", true)
 
 	for _, h := range []string{"", "Bearer nope"} {
 		rec := httptest.NewRecorder()
@@ -135,7 +142,7 @@ func TestAuthResolveAnonymousFallback(t *testing.T) {
 func TestAuthResolveRejectsWhenAnonymousDisabled(t *testing.T) {
 	cfg := &config.Config{GitHubToken: "default-pat", AuthTokens: []config.AuthEntry{{Key: "k", PAT: "p"}}}
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	handler := authResolve(next, cfg, nil, false)
+	handler := authResolve(next, cfg, nil, "", false)
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/mcp", nil))
@@ -267,7 +274,7 @@ func TestAuthResolveWritesLoginToContext(t *testing.T) {
 			gotLogin = l
 		}
 	})
-	handler := authResolve(next, cfg, logins, false)
+	handler := authResolve(next, cfg, logins, "", false)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
@@ -744,5 +751,148 @@ func TestOwnerModeChainEndToEnd(t *testing.T) {
 	}
 	if buf.String() != "" {
 		t.Errorf("rejected requests must not be audited, got: %s", buf.String())
+	}
+}
+
+func TestAuthFailGuardBlocksRepeatedFailures(t *testing.T) {
+	discardLogs(t)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if bearerToken(r) == nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := authFailGuard(next)
+	req := func(ip string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+		r.RemoteAddr = ip + ":1234"
+		return r
+	}
+	for i := 0; i < authFailThreshold; i++ {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req("10.0.0.1"))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status = %d, want 401", i+1, rec.Code)
+		}
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req("10.0.0.1"))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("status after %d failures = %d, want 429", authFailThreshold, rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("429 must carry Retry-After")
+	}
+	// A different source address is not blocked by 10.0.0.1's failures.
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req("10.0.0.2"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("other IP status = %d, want 401 (not blocked)", rec.Code)
+	}
+}
+
+func TestAuthFailGuardSuccessDecaysCounter(t *testing.T) {
+	discardLogs(t)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if bearerToken(r) == nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := authFailGuard(next)
+	mk := func(withToken bool) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+		r.RemoteAddr = "10.1.1.1:9999"
+		if withToken {
+			r.Header.Set("Authorization", "Bearer good")
+		}
+		return r
+	}
+	for i := 0; i < authFailThreshold-1; i++ {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, mk(false))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status = %d, want 401", i+1, rec.Code)
+		}
+	}
+	// One success halves the counter (19 -> 9) instead of clearing it, so a
+	// sustained guessing campaign cannot be washed out by periodic successes
+	// made with another valid key on a multi-identity deployment.
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, mk(true))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("success status = %d, want 200", rec.Code)
+	}
+	// Ten more failures keep the counter below the threshold (9 + 10 = 19).
+	for i := 0; i < 10; i++ {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, mk(false))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("post-decay attempt %d: status = %d, want 401", i+1, rec.Code)
+		}
+	}
+	// The threshold-crossing failure is answered by auth with 401; only
+	// subsequent requests are blocked.
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, mk(false))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("threshold-crossing request: status = %d, want 401", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, mk(false))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("request past threshold: status = %d, want 429", rec.Code)
+	}
+}
+
+// Flooding the failure map from many rotating sources must not lift an
+// already-active block: the reset keeps entries whose block window is open.
+func TestAuthFailGuardResetKeepsActiveBlocks(t *testing.T) {
+	discardLogs(t)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if bearerToken(r) == nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := authFailGuard(next)
+	req := func(ip string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+		r.RemoteAddr = ip + ":1234"
+		return r
+	}
+	// Block 10.0.0.1 outright.
+	for i := 0; i < authFailThreshold; i++ {
+		handler.ServeHTTP(httptest.NewRecorder(), req("10.0.0.1"))
+	}
+	// Flood from enough other sources to trip the map-size reset. The
+	// blocked source is skipped by the guard, so it does not count here.
+	for i := 0; i < authFailMaxEntries; i++ {
+		ip := fmt.Sprintf("10.%d.%d.%d", (i>>16)&0xff, (i>>8)&0xff, i&0xff)
+		if ip == "10.0.0.1" {
+			continue
+		}
+		handler.ServeHTTP(httptest.NewRecorder(), req(ip))
+	}
+	// The active block must have survived the reset.
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req("10.0.0.1"))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("blocked source after reset: status = %d, want 429", rec.Code)
+	}
+}
+
+func TestAuthFailGuardPassesSuccessThrough(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	handler := authFailGuard(next)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+	if rec.Code != http.StatusTeapot {
+		t.Errorf("status = %d, want %d (guard must not interfere)", rec.Code, http.StatusTeapot)
 	}
 }

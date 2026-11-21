@@ -85,12 +85,12 @@ func main() {
 	// a revoked or expired PAT fails fast at startup, and record each login
 	// so audit logs can attribute calls to the account actually used —
 	// including for the random fallback, where the owner argument does not
-	// identify the account. The default PAT was verified above; mapping it
-	// keeps the ALLOW_UNAUTHENTICATED path attributable too. PATs are never
-	// logged, only their public logins.
-	patLogins := make(map[string]string)
+	// identify the account. The default PAT was verified above; seeding its
+	// login in every mode keeps the ALLOW_UNAUTHENTICATED fallback and the
+	// owner-mode default attributable in audit logs. PATs are never logged,
+	// only their public logins.
+	patLogins := map[string]string{cfg.GitHubToken: login}
 	if cfg.AuthMode == config.AuthModeOwner {
-		patLogins[cfg.GitHubToken] = login
 		// The default PAT was already verified above; skip it in the loop so
 		// a routing entry reusing it does not self-check twice.
 		seen := map[string]bool{cfg.GitHubToken: true}
