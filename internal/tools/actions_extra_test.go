@@ -52,6 +52,66 @@ func TestTailLinesMarksOversizedLogTruncated(t *testing.T) {
 	}
 }
 
+// A single line beyond the per-line cap must be replaced by a placeholder
+// instead of failing the whole fetch or ballooning memory.
+func TestTailLinesReplacesOverlongLineWithPlaceholder(t *testing.T) {
+	long := strings.Repeat("x", 2<<20) // 2 MiB single line
+	input := "before\n" + long + "\nafter\n"
+	got, truncated, err := tailLines(strings.NewReader(input), 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if truncated {
+		t.Error("2 MiB total is below the log cap; truncated must stay false")
+	}
+	if !strings.Contains(got, "before") || !strings.Contains(got, "after") {
+		t.Errorf("neighbouring lines must survive, got: %q", got)
+	}
+	if strings.Contains(got, "xxxxx") {
+		t.Error("overlong line content must not be kept")
+	}
+	if !strings.Contains(got, "omitted") {
+		t.Errorf("overlong line must be replaced by a placeholder, got: %q", got)
+	}
+}
+
+// Raw bytes of an overlong line count toward the overall size cap.
+func TestTailLinesOverlongLineCountsTowardCap(t *testing.T) {
+	long := strings.Repeat("y", 6<<20) // 6 MiB single line, above the 5MB cap
+	got, truncated, err := tailLines(strings.NewReader(long+"\nend\n"), 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !truncated {
+		t.Error("6 MiB line must trip the size cap")
+	}
+	if strings.Contains(got, "yyyyy") {
+		t.Error("overlong line content must not be kept")
+	}
+}
+
+// A final line without a trailing newline is still kept, matching the
+// previous Scanner-based behavior.
+func TestTailLinesKeepsFinalLineWithoutNewline(t *testing.T) {
+	got, truncated, err := tailLines(strings.NewReader("a\nb\nc"), 0)
+	if err != nil || truncated {
+		t.Fatalf("err=%v truncated=%v", err, truncated)
+	}
+	if got != "a\nb\nc" {
+		t.Errorf("tailLines = %q, want %q", got, "a\nb\nc")
+	}
+}
+
+func TestTailLinesTrimsCarriageReturns(t *testing.T) {
+	got, truncated, err := tailLines(strings.NewReader("a\r\nb\r\n"), 0)
+	if err != nil || truncated {
+		t.Fatalf("err=%v truncated=%v", err, truncated)
+	}
+	if got != "a\nb" {
+		t.Errorf("tailLines = %q, want %q", got, "a\nb")
+	}
+}
+
 // startLogServer returns the URL of a standalone server serving a fixed log
 // body; the fake GitHub API redirects log requests to it.
 func startLogServer(t *testing.T, body string) *string {

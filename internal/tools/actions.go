@@ -49,9 +49,17 @@ func fetchLogContent(ctx context.Context, url string, tail int) (string, bool, e
 	return tailLines(resp.Body, tail)
 }
 
+// maxLogLineBytes caps how many bytes of a single log line are kept before
+// the remainder is replaced by a placeholder. CI logs are line-oriented, but
+// nothing stops a step from printing megabytes without a newline; the cap
+// keeps tailLines memory bounded regardless of the upstream body.
+const maxLogLineBytes = 1 << 20
+
 // tailLines keeps the last n lines (<=10000) of r within a bounded memory
 // budget. It reports whether scanning stopped early because the log exceeded
-// maxLogBytes.
+// maxLogBytes. Single lines longer than maxLogLineBytes are replaced by a
+// placeholder so one pathological line can neither fail the whole fetch nor
+// balloon memory; its raw bytes still count toward the overall size cap.
 func tailLines(r io.Reader, n int) (string, bool, error) {
 	if n <= 0 {
 		// No explicit tail: keep the last 10000 lines, which is also the cap.
@@ -64,19 +72,47 @@ func tailLines(r io.Reader, n int) (string, bool, error) {
 	size := 0
 	truncated := false
 	total := 0
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		total += len(scanner.Bytes()) + 1
-		if total > maxLogBytes {
-			truncated = true
+	br := bufio.NewReaderSize(r, 64*1024)
+	var line []byte
+	rawLen := 0
+	tooLong := false
+	for {
+		chunk, err := br.ReadSlice('\n')
+		rawLen += len(chunk)
+		if !tooLong {
+			if len(line)+len(chunk) > maxLogLineBytes {
+				line = append(line, chunk[:maxLogLineBytes-len(line)]...)
+				tooLong = true
+			} else {
+				line = append(line, chunk...)
+			}
+		}
+		if err == bufio.ErrBufferFull {
+			continue // line longer than the read buffer; keep consuming it
+		}
+		if rawLen > 0 {
+			total += rawLen
+			if total > maxLogBytes {
+				truncated = true
+				break
+			}
+			if tooLong {
+				ring[size%n] = fmt.Sprintf("[line %d omitted: %d bytes exceed the %d-byte line cap]",
+					size+1, rawLen, maxLogLineBytes)
+			} else {
+				ring[size%n] = strings.TrimRight(string(line), "\r\n")
+			}
+			size++
+		}
+		if err != nil {
+			if err != io.EOF {
+				return "", false, err
+			}
 			break
 		}
-		ring[size%n] = scanner.Text()
-		size++
-	}
-	if err := scanner.Err(); err != nil {
-		return "", false, err
+		line = line[:0]
+		rawLen = 0
+		tooLong = false
 	}
 	start := 0
 	if size > n {
