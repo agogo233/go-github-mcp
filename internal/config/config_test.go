@@ -11,6 +11,7 @@ func setEnv(t *testing.T, kv map[string]string) {
 	for _, k := range []string{
 		"GITHUB_PERSONAL_ACCESS_TOKEN", "GITHUB_HOST", "READ_ONLY",
 		"MCP_TRANSPORT", "HTTP_ADDR", "GITHUB_MCP_AUTH_TOKEN", "ALLOW_UNAUTHENTICATED",
+		"MCP_AUTH_MODE", "GITHUB_OWNER_TOKENS",
 		"GITHUB_TOOLSETS", "GITHUB_TOOLS",
 		"HTTP_RATE_LIMIT", "HTTP_RATE_BURST", "HTTP_MAX_CONCURRENT",
 	} {
@@ -183,6 +184,201 @@ func TestResolveAuthToken(t *testing.T) {
 	}
 	if _, ok := cfg.ResolveAuthToken(""); ok {
 		t.Error("resolve empty should not match")
+	}
+}
+
+func TestLoadAuthModeDefaultsToIdentity(t *testing.T) {
+	setEnv(t, map[string]string{
+		"GITHUB_PERSONAL_ACCESS_TOKEN": "t",
+		"MCP_TRANSPORT":                "http",
+		"GITHUB_MCP_AUTH_TOKEN":        "k1:pat1",
+	})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.AuthMode != AuthModeIdentity {
+		t.Errorf("default auth mode = %q, want %q", cfg.AuthMode, AuthModeIdentity)
+	}
+	if len(cfg.AuthTokens) != 1 || cfg.OwnerTokens != nil || cfg.SharedSecret != "" {
+		t.Errorf("identity mode must parse key:pat pairs and leave owner fields empty, got %+v", cfg)
+	}
+}
+
+func TestLoadRejectsInvalidAuthMode(t *testing.T) {
+	setEnv(t, map[string]string{
+		"GITHUB_PERSONAL_ACCESS_TOKEN": "t",
+		"MCP_AUTH_MODE":                "byowner",
+	})
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "MCP_AUTH_MODE") {
+		t.Fatalf("expected invalid MCP_AUTH_MODE error, got %v", err)
+	}
+}
+
+func TestLoadOwnerMode(t *testing.T) {
+	setEnv(t, map[string]string{
+		"GITHUB_PERSONAL_ACCESS_TOKEN": "t",
+		"MCP_TRANSPORT":                "http",
+		"MCP_AUTH_MODE":                "owner",
+		"GITHUB_MCP_AUTH_TOKEN":        "shared-secret",
+		"GITHUB_OWNER_TOKENS":          "alice:pat_a,alice:pat_a2,MyOrg:pat_org",
+	})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.AuthMode != AuthModeOwner {
+		t.Errorf("auth mode = %q, want %q", cfg.AuthMode, AuthModeOwner)
+	}
+	if cfg.SharedSecret != "shared-secret" {
+		t.Errorf("SharedSecret = %q, want shared-secret", cfg.SharedSecret)
+	}
+	want := []AuthEntry{{Key: "alice", PAT: "pat_a"}, {Key: "alice", PAT: "pat_a2"}, {Key: "MyOrg", PAT: "pat_org"}}
+	if len(cfg.OwnerTokens) != len(want) {
+		t.Fatalf("OwnerTokens = %+v, want %+v", cfg.OwnerTokens, want)
+	}
+	for i := range want {
+		if cfg.OwnerTokens[i] != want[i] {
+			t.Errorf("OwnerTokens[%d] = %+v, want %+v", i, cfg.OwnerTokens[i], want[i])
+		}
+	}
+}
+
+func TestLoadOwnerModeRequiresSecretAndOwners(t *testing.T) {
+	base := map[string]string{
+		"GITHUB_PERSONAL_ACCESS_TOKEN": "t",
+		"MCP_TRANSPORT":                "http",
+		"MCP_AUTH_MODE":                "owner",
+	}
+	setEnv(t, base)
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "GITHUB_MCP_AUTH_TOKEN") {
+		t.Fatalf("expected missing shared secret error, got %v", err)
+	}
+	setEnv(t, map[string]string{
+		"GITHUB_PERSONAL_ACCESS_TOKEN": "t",
+		"MCP_TRANSPORT":                "http",
+		"MCP_AUTH_MODE":                "owner",
+		"GITHUB_MCP_AUTH_TOKEN":        "shared-secret",
+	})
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "GITHUB_OWNER_TOKENS") {
+		t.Fatalf("expected missing GITHUB_OWNER_TOKENS error, got %v", err)
+	}
+	// The escape hatch keeps local debugging possible without either variable.
+	setEnv(t, map[string]string{
+		"GITHUB_PERSONAL_ACCESS_TOKEN": "t",
+		"MCP_TRANSPORT":                "http",
+		"MCP_AUTH_MODE":                "owner",
+		"ALLOW_UNAUTHENTICATED":        "true",
+	})
+	if _, err := Load(); err != nil {
+		t.Fatalf("unexpected error with escape hatch: %v", err)
+	}
+}
+
+func TestParseOwnerTokens(t *testing.T) {
+	if got, err := parseOwnerTokens(""); err != nil || got != nil {
+		t.Errorf("parseOwnerTokens(\"\") = %v, %v; want nil, nil", got, err)
+	}
+	got, err := parseOwnerTokens("alice:pat_a, bob:pat_b ")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []AuthEntry{{Key: "alice", PAT: "pat_a"}, {Key: "bob", PAT: "pat_b"}}
+	if len(got) != len(want) {
+		t.Fatalf("parseOwnerTokens = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("entry %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	// The same owner may carry several PATs to spread rate limits.
+	if _, err := parseOwnerTokens("alice:pat_a,alice:pat_a2"); err != nil {
+		t.Errorf("repeated owner with different PATs should be allowed, got %v", err)
+	}
+}
+
+func TestParseOwnerTokensRejectsInvalid(t *testing.T) {
+	cases := []string{
+		"nocolon",                 // missing ":"
+		":pat",                    // empty owner
+		"alice:",                  // empty pat
+		"alice:pat_a,alice:pat_a", // exact duplicate pair
+		"bad owner:pat",           // space in owner
+		"alice:pat,other",         // malformed second entry
+	}
+	for _, c := range cases {
+		if _, err := parseOwnerTokens(c); err == nil {
+			t.Errorf("parseOwnerTokens(%q) expected error, got nil", c)
+		}
+	}
+}
+
+func TestResolveOwnerToken(t *testing.T) {
+	cfg := &Config{
+		GitHubToken: "default-pat",
+		OwnerTokens: []AuthEntry{
+			{Key: "alice", PAT: "pat_a1"},
+			{Key: "alice", PAT: "pat_a2"},
+			{Key: "myorg", PAT: "pat_org"},
+		},
+	}
+	// A single-entry owner always resolves to its PAT.
+	single := &Config{OwnerTokens: []AuthEntry{{Key: "alice", PAT: "pat_a1"}}}
+	if pat, routed := single.ResolveOwnerToken("alice"); pat != "pat_a1" || routed != RouteOwner {
+		t.Errorf("single entry = %q, %q; want pat_a1, owner", pat, routed)
+	}
+	// Matching is case-insensitive, mirroring GitHub logins.
+	if pat, routed := single.ResolveOwnerToken("ALICE"); pat != "pat_a1" || routed != RouteOwner {
+		t.Errorf("case-insensitive hit = %q, %q; want pat_a1, owner", pat, routed)
+	}
+	// Several PATs for one owner: the pick stays within that owner's PATs.
+	seen := map[string]bool{}
+	for i := 0; i < 64; i++ {
+		pat, routed := cfg.ResolveOwnerToken("Alice")
+		if routed != RouteOwner {
+			t.Fatalf("owner hit routed_by = %q, want %q", routed, RouteOwner)
+		}
+		if pat != "pat_a1" && pat != "pat_a2" {
+			t.Fatalf("owner hit pat = %q, want one of alice's PATs", pat)
+		}
+		seen[pat] = true
+	}
+	if len(seen) != 2 {
+		t.Errorf("expected both alice PATs to be used across picks, got %v", seen)
+	}
+	// Unknown owners fall back to a random pick from the whole table.
+	pool := map[string]bool{"pat_a1": true, "pat_a2": true, "pat_org": true}
+	for i := 0; i < 128; i++ {
+		pat, routed := cfg.ResolveOwnerToken("nobody")
+		if routed != RouteRandom {
+			t.Fatalf("fallback routed_by = %q, want %q", routed, RouteRandom)
+		}
+		if !pool[pat] {
+			t.Fatalf("fallback pat = %q, want one of the routing table", pat)
+		}
+	}
+	// Tools without an owner argument behave like unknown owners.
+	if _, routed := cfg.ResolveOwnerToken(""); routed != RouteRandom {
+		t.Errorf("empty owner routed_by = %q, want %q", routed, RouteRandom)
+	}
+	// An empty routing table (debug deployments) uses the default PAT.
+	empty := &Config{GitHubToken: "default-pat"}
+	if pat, routed := empty.ResolveOwnerToken("alice"); pat != "default-pat" || routed != RouteDefault {
+		t.Errorf("empty table = %q, %q; want default-pat, default", pat, routed)
+	}
+}
+
+func TestResolveSharedSecret(t *testing.T) {
+	cfg := &Config{SharedSecret: "shared-secret"}
+	if !cfg.ResolveSharedSecret("shared-secret") {
+		t.Error("ResolveSharedSecret should accept the configured secret")
+	}
+	if cfg.ResolveSharedSecret("shared-secreT") {
+		t.Error("ResolveSharedSecret must reject a different secret")
+	}
+	if cfg.ResolveSharedSecret("") {
+		t.Error("ResolveSharedSecret must reject an empty secret")
 	}
 }
 

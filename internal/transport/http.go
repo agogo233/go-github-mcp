@@ -28,9 +28,10 @@ const (
 	maxBodyBytes = 10 << 20 // 10 MiB
 
 	// toolNameProbeLimit caps how much of a tools/call body is buffered just
-	// to extract the invoked tool name for audit logs. 64 KiB is enough to
-	// reach params.name in practice; larger bodies simply skip the tool-name
-	// field instead of materializing up to maxBodyBytes per request.
+	// to extract the invoked tool name and owner argument for audit logs and
+	// owner-based routing. 64 KiB is enough to reach params.name and
+	// arguments.owner in practice; larger bodies keep whatever was collected
+	// within the window instead of materializing up to maxBodyBytes.
 	toolNameProbeLimit = 64 << 10
 )
 
@@ -40,15 +41,22 @@ const (
 // secret are never logged.
 type ghLoginKey struct{}
 
-// RunHTTP serves MCP over Streamable HTTP with optional Bearer shared-secret
-// authentication, an unauthenticated /healthz probe, and per-client audit
-// logging. WriteTimeout is deliberately zero: the Streamable HTTP transport
-// holds long-lived SSE responses that must not be cut by an absolute deadline.
+// RunHTTP serves MCP over Streamable HTTP with Bearer authentication, an
+// unauthenticated /healthz probe, and per-client audit logging. WriteTimeout
+// is deliberately zero: the Streamable HTTP transport holds long-lived SSE
+// responses that must not be cut by an absolute deadline.
 //
-// logins maps each configured GITHUB_MCP_AUTH_TOKEN key to the GitHub login
-// it was verified against at startup; it feeds the gh_login audit field and
-// may be nil when no identity is configured (ALLOW_UNAUTHENTICATED mode).
-func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config, logins map[string]string) error {
+// Two authentication modes exist:
+//   - identity (default): logins maps each GITHUB_MCP_AUTH_TOKEN key to the
+//     GitHub login it was verified against at startup; the presented key
+//     selects the PAT used for the request.
+//   - owner (MCP_AUTH_MODE=owner): patLogins maps each routing-table PAT to
+//     its verified login; the repository owner argument of the invoked tool
+//     selects the PAT, with a random pick from the routing table as fallback.
+//
+// Both maps feed the gh_login audit field and may be nil when the respective
+// mode is unused or authentication is disabled (ALLOW_UNAUTHENTICATED).
+func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config, logins, patLogins map[string]string) error {
 	mcpHTTP := mcpserver.NewStreamableHTTPServer(s, mcpserver.WithEndpointPath(endpointPath))
 
 	mcpMux := http.NewServeMux()
@@ -59,7 +67,19 @@ func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config, lo
 	// resolution wraps audit so unauthenticated requests are rejected before
 	// their body is buffered and the resolved login is available to audit.
 	protected := auditLog(rateLimit(mcpMux, cfg))
-	if len(cfg.AuthTokens) > 0 {
+	if cfg.AuthMode == config.AuthModeOwner {
+		// Owner-routing mode: one shared Bearer secret gates the endpoint;
+		// the tool call's owner argument selects the GitHub PAT per request.
+		protected = ownerRoute(protected, cfg, patLogins)
+		if cfg.SharedSecret != "" {
+			protected = bearerAuth(protected, cfg)
+		} else if isLoopbackAddr(cfg.HTTPAddr) {
+			slog.Warn("HTTP authentication disabled via ALLOW_UNAUTHENTICATED; do not expose beyond loopback")
+		} else {
+			return fmt.Errorf("refusing to start: ALLOW_UNAUTHENTICATED=true with non-loopback listen address %q "+
+				"would expose the GitHub token to anyone who can reach this port", cfg.HTTPAddr)
+		}
+	} else if len(cfg.AuthTokens) > 0 {
 		protected = authResolve(protected, cfg, logins, false)
 	} else if isLoopbackAddr(cfg.HTTPAddr) {
 		slog.Warn("HTTP authentication disabled via ALLOW_UNAUTHENTICATED; do not expose beyond loopback")
@@ -237,6 +257,65 @@ func authResolve(next http.Handler, cfg *config.Config, logins map[string]string
 	})
 }
 
+// bearerAuth enforces the single shared MCP Bearer secret of owner-routing
+// mode. Every caller presents the same secret; the GitHub identity is chosen
+// per request from the tool call's owner argument downstream. Comparison is
+// constant time, and failures are rejected with a JSON-RPC-shaped 401 before
+// the request body is buffered or handled.
+func bearerAuth(next http.Handler, cfg *config.Config) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if tok := bearerToken(r); tok != nil && cfg.ResolveSharedSecret(string(tok)) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("WWW-Authenticate", `Bearer realm="go-github-mcp"`)
+		writeJSONRPCError(w, http.StatusUnauthorized, "unauthorized: unknown or missing MCP auth token")
+	})
+}
+
+// routedByKey and ownerKey carry credential-routing attribution for audit
+// logs: how the PAT was chosen (routed_by) and which owner argument drove
+// the choice. Neither is sensitive; the PAT and the shared secret never are.
+type routedByKey struct{}
+type ownerKey struct{}
+
+// callInfo is what the body probe extracted from a tools/call request: the
+// invoked tool name and, when present, the repository owner argument that
+// owner-routing mode routes on. Both fields are best-effort: arguments
+// beyond the probe window end the scan and keep what was collected so far.
+type callInfo struct {
+	tool  string
+	owner string
+}
+
+// callInfoKey carries the probe result in the request context so the audit
+// wrapper does not have to read the body a second time after ownerRoute.
+type callInfoKey struct{}
+
+// ownerRoute resolves the GitHub PAT for the request from the repository
+// owner argument of the invoked tool (owner-routing mode). The PAT is chosen
+// per request: a routing-table hit for the owner, or a random pick from the
+// table when the owner is unknown or the tool carries no owner argument, so
+// that GitHub rate limits are spread across the configured tokens. The
+// verified login of the chosen PAT is bound to the request context for
+// audit attribution.
+func ownerRoute(next http.Handler, cfg *config.Config, patLogins map[string]string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ci := probeCallInfo(r)
+		ctx := context.WithValue(r.Context(), callInfoKey{}, ci)
+		pat, routedBy := cfg.ResolveOwnerToken(ci.owner)
+		ctx = githubclient.WithContextToken(ctx, pat)
+		ctx = context.WithValue(ctx, routedByKey{}, routedBy)
+		if ci.owner != "" {
+			ctx = context.WithValue(ctx, ownerKey{}, ci.owner)
+		}
+		if login, ok := patLogins[pat]; ok && login != "" {
+			ctx = context.WithValue(ctx, ghLoginKey{}, login)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // writeJSONRPCError emits a JSON-RPC-shaped error body with the given HTTP
 // status, matching the shape the transport uses for throttled requests.
 func writeJSONRPCError(w http.ResponseWriter, status int, message string) {
@@ -272,8 +351,9 @@ func limitBody(next http.Handler, n int64) http.Handler {
 
 // auditLog records who called what. X-Client-Name is self-reported by the
 // client and is for operational insight only, not strong attribution. For
-// tools/call requests the invoked tool name is recorded too. The
-// Authorization header is never logged.
+// tools/call requests the invoked tool name is recorded too, plus the
+// credential-routing decision of owner mode (routed_by, owner) when present.
+// The Authorization header is never logged.
 func auditLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" {
@@ -281,7 +361,12 @@ func auditLog(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		tool := mcpToolName(r)
+		var tool string
+		if ci, ok := r.Context().Value(callInfoKey{}).(callInfo); ok {
+			tool = sanitizeLogField(ci.tool, 128)
+		} else {
+			tool = mcpToolName(r)
+		}
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		defer func() {
@@ -295,6 +380,12 @@ func auditLog(next http.Handler) http.Handler {
 			}
 			if tool != "" {
 				args = append(args, "tool", tool)
+			}
+			if routedBy, ok := r.Context().Value(routedByKey{}).(string); ok && routedBy != "" {
+				args = append(args, "routed_by", routedBy)
+			}
+			if owner, ok := r.Context().Value(ownerKey{}).(string); ok && owner != "" {
+				args = append(args, "owner", sanitizeLogField(owner, 128))
 			}
 			if login, ok := r.Context().Value(ghLoginKey{}).(string); ok && login != "" {
 				args = append(args, "gh_login", login)
@@ -329,109 +420,164 @@ func (p *probeReader) Read(b []byte) (int, error) {
 }
 
 // mcpToolName extracts the invoked tool name from a tools/call JSON-RPC body
-// so audit logs show which tool was invoked, not just that /mcp was hit. It
-// streams at most the first toolNameProbeLimit bytes and stops as soon as
-// params.name has been seen, so requests with large arguments (e.g. embedded
-// file contents) are still attributed without buffering their full size. The
-// probed bytes are re-attached to the untouched remainder via io.MultiReader,
-// so the next handler always receives the complete body. Bodies with a known
-// size above the request limit are left untouched so the outer limit
-// middleware keeps answering 413.
+// so audit logs show which tool was invoked, not just that /mcp was hit.
 func mcpToolName(r *http.Request) string {
-	if r.Method != http.MethodPost || r.URL.Path != endpointPath || r.Body == nil {
+	ci := probeCallInfo(r)
+	if ci.tool == "" {
 		return ""
+	}
+	return sanitizeLogField(ci.tool, 128)
+}
+
+// probeCallInfo streams at most the first toolNameProbeLimit bytes of a
+// tools/call body to extract the invoked tool name and the repository owner
+// argument used by owner-routing mode. It stops as soon as both values are
+// known or the probe window ends, so requests with large arguments (e.g.
+// embedded file contents) are still attributed without buffering their full
+// size. The probed bytes are re-attached to the untouched remainder via
+// io.MultiReader, so the next handler always receives the complete body.
+// Bodies with a known size above the request limit are left untouched so the
+// outer limit middleware keeps answering 413.
+func probeCallInfo(r *http.Request) callInfo {
+	if r.Method != http.MethodPost || r.URL.Path != endpointPath || r.Body == nil {
+		return callInfo{}
 	}
 	if r.ContentLength > maxBodyBytes {
-		return ""
+		return callInfo{}
 	}
 	pr := &probeReader{r: r.Body, max: toolNameProbeLimit}
-	name := scanToolName(json.NewDecoder(pr))
+	ci := scanCallInfo(json.NewDecoder(pr))
 	// Re-attach every byte the probe consumed (even on a partial scan) so the
 	// transport still sees the complete request body.
 	r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(pr.all.Bytes()), r.Body))
-	if name == "" {
-		return ""
-	}
-	return sanitizeLogField(name, 128)
+	return ci
 }
 
-// scanToolName walks the top level of a JSON-RPC request looking for
-// {"method":"tools/call","params":{"name":...}} and returns the tool name.
-// Either field order is tolerated, with one caveat: when params comes first
-// and its remaining fields (e.g. huge arguments) extend beyond the probe
-// window, the scan ends before method can be confirmed and the name is
-// skipped. The scan stops as soon as the name is known, the object ends, or
-// the request is clearly not a tools/call.
-func scanToolName(dec *json.Decoder) string {
+// scanCallInfo walks the top level of a JSON-RPC request looking for
+// {"method":"tools/call","params":{"name":...,"arguments":{...,"owner":...}}}
+// and returns the tool name and owner argument. Either field order is
+// tolerated, with one caveat: when params comes first and its remaining
+// fields (e.g. huge arguments) extend beyond the probe window, the scan ends
+// before method can be confirmed and the values are skipped. Conversely, a
+// confirmed tools/call keeps everything collected so far when the window
+// ends mid-arguments. The scan stops as soon as both values are known, the
+// object ends, or the request is clearly not a tools/call.
+func scanCallInfo(dec *json.Decoder) callInfo {
 	tok, err := dec.Token()
 	if err != nil {
-		return ""
+		return callInfo{}
 	}
 	if d, ok := tok.(json.Delim); !ok || d != '{' {
-		return ""
+		return callInfo{}
 	}
-	var method, name string
+	var ci callInfo
+	confirmed := false
 	for {
 		key, ok := nextObjectKey(dec)
 		if !ok {
-			return ""
+			return partialCallInfo(confirmed, ci)
 		}
 		switch key {
 		case "method":
 			v, err := dec.Token()
 			if err != nil {
-				return ""
+				return callInfo{}
 			}
-			s, _ := v.(string)
-			method = s
-			if method != "tools/call" {
+			if s, _ := v.(string); s != "tools/call" {
 				// e.g. initialize: params.name is the server name, not a tool.
-				return ""
+				return callInfo{}
 			}
-			if name != "" {
-				return name
+			confirmed = true
+			if ci.tool != "" {
+				// Params were parsed before method; the owner came with them.
+				return ci
 			}
 		case "params":
-			// Parse params.name regardless of field order: it only names a
-			// tool once the request is known to be a tools/call.
+			// Parse params.name and params.arguments.owner regardless of
+			// field order; they only name a call once it is a tools/call.
 			if !expectObject(dec) {
-				return ""
+				return callInfo{}
 			}
 			for {
 				pkey, ok := nextObjectKey(dec)
 				if !ok {
 					break
 				}
-				if pkey == "name" && name == "" {
-					v, err := dec.Token()
-					if err != nil {
-						return ""
+				switch pkey {
+				case "name":
+					if ci.tool == "" {
+						v, err := dec.Token()
+						if err != nil {
+							return partialCallInfo(confirmed, ci)
+						}
+						if s, ok := v.(string); ok {
+							ci.tool = s
+						} else if err := skipRest(dec, v); err != nil {
+							// Non-string name: consume the whole value so the
+							// scan stays aligned with the token stream.
+							return partialCallInfo(confirmed, ci)
+						}
+						continue
 					}
-					if s, ok := v.(string); ok {
-						name = s
+					if err := skipValue(dec); err != nil {
+						return partialCallInfo(confirmed, ci)
 					}
-					if method == "tools/call" {
-						// Method already confirmed: return immediately so
+				case "arguments":
+					if !expectObject(dec) {
+						return partialCallInfo(confirmed, ci)
+					}
+					for {
+						akey, ok := nextObjectKey(dec)
+						if !ok {
+							break
+						}
+						if akey == "owner" && ci.owner == "" {
+							v, err := dec.Token()
+							if err != nil {
+								return partialCallInfo(confirmed, ci)
+							}
+							if s, ok := v.(string); ok {
+								ci.owner = s
+							} else if err := skipRest(dec, v); err != nil {
+								// Non-string owner: consume the whole value to
+								// keep the token stream aligned.
+								return partialCallInfo(confirmed, ci)
+							}
+							continue
+						}
+						// Skip every other argument, nested included, so
 						// oversized arguments are never pulled through the
-						// probe window.
-						return name
+						// probe window one by one.
+						if err := skipValue(dec); err != nil {
+							return partialCallInfo(confirmed, ci)
+						}
 					}
-					continue
-				}
-				// Skip arguments and any other params fields, nested included.
-				if err := skipValue(dec); err != nil {
-					return ""
+				default:
+					// Skip arguments and any other params fields.
+					if err := skipValue(dec); err != nil {
+						return partialCallInfo(confirmed, ci)
+					}
 				}
 			}
-			if method == "tools/call" && name != "" {
-				return name
+			if confirmed {
+				return ci
 			}
 		default:
 			if err := skipValue(dec); err != nil {
-				return ""
+				return partialCallInfo(confirmed, ci)
 			}
 		}
 	}
+}
+
+// partialCallInfo keeps whatever was collected once the request is confirmed
+// to be a tools/call: a scan cut short by the probe window must not lose the
+// tool name just because huge arguments followed it.
+func partialCallInfo(confirmed bool, ci callInfo) callInfo {
+	if confirmed {
+		return ci
+	}
+	return callInfo{}
 }
 
 func expectObject(dec *json.Decoder) bool {
@@ -451,6 +597,14 @@ func skipValue(dec *json.Decoder) error {
 	if err != nil {
 		return err
 	}
+	return skipRest(dec, tok)
+}
+
+// skipRest consumes the remainder of a JSON value whose first token has
+// already been read: scalars are complete after that one token, while
+// objects and arrays need their matching close delimiter located. The
+// already-closed delimiters '}' and ']' are treated as scalars.
+func skipRest(dec *json.Decoder, tok json.Token) error {
 	d, ok := tok.(json.Delim)
 	if !ok || d == '}' || d == ']' {
 		return nil // scalar or an already-closed container

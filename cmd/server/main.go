@@ -81,6 +81,36 @@ func main() {
 		slog.Info("GitHub identity self-check passed", "login", l, "host", cfg.GitHubHostOrDefault())
 	}
 
+	// Owner-routing mode: verify every distinct routing-table PAT up front so
+	// a revoked or expired PAT fails fast at startup, and record each login
+	// so audit logs can attribute calls to the account actually used —
+	// including for the random fallback, where the owner argument does not
+	// identify the account. The default PAT was verified above; mapping it
+	// keeps the ALLOW_UNAUTHENTICATED path attributable too. PATs are never
+	// logged, only their public logins.
+	patLogins := make(map[string]string)
+	if cfg.AuthMode == config.AuthModeOwner {
+		patLogins[cfg.GitHubToken] = login
+		// The default PAT was already verified above; skip it in the loop so
+		// a routing entry reusing it does not self-check twice.
+		seen := map[string]bool{cfg.GitHubToken: true}
+		for i, e := range cfg.OwnerTokens {
+			if seen[e.PAT] {
+				continue
+			}
+			seen[e.PAT] = true
+			identityCtx := githubclient.WithContextToken(ctx, e.PAT)
+			l, err := githubclient.Verify(identityCtx, client)
+			if err != nil {
+				// entry_index is safe to log; the PAT itself never is.
+				slog.Error("GitHub owner token self-check failed", "entry_index", i+1, "error", err)
+				os.Exit(1)
+			}
+			patLogins[e.PAT] = l
+			slog.Info("GitHub owner token self-check passed", "login", l, "host", cfg.GitHubHostOrDefault())
+		}
+	}
+
 	mcpServer, err := server.New(cfg, client, version)
 	if err != nil {
 		slog.Error("failed to initialize MCP server", "error", err)
@@ -90,7 +120,7 @@ func main() {
 	switch cfg.Transport {
 	case config.TransportHTTP:
 		slog.Info("starting HTTP transport", "addr", cfg.HTTPAddr, "read_only", cfg.ReadOnly)
-		if err := transport.RunHTTP(ctx, mcpServer, cfg, logins); err != nil {
+		if err := transport.RunHTTP(ctx, mcpServer, cfg, logins, patLogins); err != nil {
 			slog.Error("HTTP server exited with error", "error", err)
 			os.Exit(1)
 		}

@@ -468,3 +468,281 @@ func TestConcurrencyLimitIgnoresGETStreams(t *testing.T) {
 	close(release)
 	<-firstDone
 }
+
+func TestBearerAuth(t *testing.T) {
+	cfg := &config.Config{SharedSecret: "shared-secret"}
+	handler := bearerAuth(okHandler(), cfg)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("missing header: status = %d, want 401", rec.Code)
+	}
+	if rec.Header().Get("WWW-Authenticate") == "" {
+		t.Error("401 must carry WWW-Authenticate")
+	}
+
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer wrong-secret")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("wrong secret: status = %d, want 401", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer shared-secret")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("correct secret: status = %d, want 200", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "bearer shared-secret")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("case-insensitive scheme: status = %d, want 200", rec.Code)
+	}
+}
+
+func TestProbeCallInfoExtractsToolAndOwner(t *testing.T) {
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_issue","arguments":{"owner":"Alice","repo":"demo","number":1}}}`
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	ci := probeCallInfo(req)
+	if ci.tool != "get_issue" {
+		t.Errorf("probed tool = %q, want get_issue", ci.tool)
+	}
+	if ci.owner != "Alice" {
+		t.Errorf("probed owner = %q, want Alice", ci.owner)
+	}
+
+	got, _ := io.ReadAll(req.Body)
+	if string(got) != body {
+		t.Errorf("request body not preserved for the next handler: %q", string(got))
+	}
+}
+
+func TestProbeCallInfoNonToolCallHasNoOwner(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/mcp",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"name":"server"}}`))
+	if ci := probeCallInfo(req); ci.tool != "" || ci.owner != "" {
+		t.Errorf("initialize probe = %+v, want empty callInfo", ci)
+	}
+}
+
+// A confirmed tools/call whose arguments continue past the probe window must
+// keep the owner captured before the window ends — dropping it would silently
+// reroute the call to the random fallback pool.
+func TestProbeCallInfoKeepsOwnerWhenArgumentsExceedWindow(t *testing.T) {
+	pad := strings.Repeat("x", 2*toolNameProbeLimit)
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"push_files","arguments":{"owner":"alice","content":"` + pad + `"}}}`
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	ci := probeCallInfo(req)
+	if ci.tool != "push_files" {
+		t.Errorf("probed tool = %q, want push_files", ci.tool)
+	}
+	if ci.owner != "alice" {
+		t.Errorf("probed owner = %q, want alice (must survive window exhaustion)", ci.owner)
+	}
+
+	got, _ := io.ReadAll(req.Body)
+	if string(got) != body {
+		t.Errorf("request body not preserved for the next handler: %q", string(got))
+	}
+}
+
+// A non-string owner value must not derail the scan: the value is consumed
+// and the owner simply stays empty (routing then uses the random pool).
+func TestProbeCallInfoToleratesNonStringOwner(t *testing.T) {
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_issue","arguments":{"owner":{"nested":"x"},"repo":"demo"}}}`
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	ci := probeCallInfo(req)
+	if ci.tool != "get_issue" {
+		t.Errorf("probed tool = %q, want get_issue", ci.tool)
+	}
+	if ci.owner != "" {
+		t.Errorf("probed owner = %q, want empty for a non-string value", ci.owner)
+	}
+	got, _ := io.ReadAll(req.Body)
+	if string(got) != body {
+		t.Errorf("request body not preserved for the next handler: %q", string(got))
+	}
+}
+
+// ownerRoute must bind the PAT selected by the (case-insensitive) owner
+// argument, the verified login, and the routing decision into the context.
+func TestOwnerRouteRoutesByOwner(t *testing.T) {
+	cfg := &config.Config{
+		GitHubToken: "default-pat",
+		OwnerTokens: []config.AuthEntry{
+			{Key: "alice", PAT: "pat_alice"},
+			{Key: "myorg", PAT: "pat_org"},
+		},
+	}
+	patLogins := map[string]string{"pat_alice": "alice", "pat_org": "myorg"}
+	var tok, routedBy, owner, login string
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		tok = githubclient.TokenFromContext(r.Context())
+		routedBy, _ = r.Context().Value(routedByKey{}).(string)
+		owner, _ = r.Context().Value(ownerKey{}).(string)
+		login, _ = r.Context().Value(ghLoginKey{}).(string)
+	})
+	handler := ownerRoute(next, cfg, patLogins)
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_issue","arguments":{"owner":"Alice","repo":"demo"}}}`
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if tok != "pat_alice" {
+		t.Errorf("resolved token = %q, want pat_alice", tok)
+	}
+	if routedBy != config.RouteOwner {
+		t.Errorf("routed_by = %q, want %q", routedBy, config.RouteOwner)
+	}
+	if owner != "Alice" {
+		t.Errorf("owner in ctx = %q, want Alice", owner)
+	}
+	if login != "alice" {
+		t.Errorf("gh_login in ctx = %q, want alice", login)
+	}
+}
+
+// Unknown owners — and tools without an owner argument — must fall back to a
+// random pick from the routing table so GitHub rate limits stay spread.
+func TestOwnerRouteFallsBackToRandomPool(t *testing.T) {
+	cfg := &config.Config{
+		GitHubToken: "default-pat",
+		OwnerTokens: []config.AuthEntry{
+			{Key: "alice", PAT: "pat_alice"},
+			{Key: "myorg", PAT: "pat_org"},
+		},
+	}
+	pool := map[string]bool{"pat_alice": true, "pat_org": true}
+	var tok, routedBy string
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		tok = githubclient.TokenFromContext(r.Context())
+		routedBy, _ = r.Context().Value(routedByKey{}).(string)
+	})
+	handler := ownerRoute(next, cfg, nil)
+
+	bodies := []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_issue","arguments":{"owner":"nobody","repo":"demo"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_me","arguments":{}}}`,
+	}
+	for _, body := range bodies {
+		req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+		if !pool[tok] {
+			t.Errorf("fallback token = %q, want one of the routing table", tok)
+		}
+		if routedBy != config.RouteRandom {
+			t.Errorf("fallback routed_by = %q, want %q", routedBy, config.RouteRandom)
+		}
+	}
+}
+
+// An empty routing table (ALLOW_UNAUTHENTICATED debugging without owner
+// entries) must use the default PAT and say so in routed_by.
+func TestOwnerRouteEmptyTableUsesDefaultPAT(t *testing.T) {
+	cfg := &config.Config{GitHubToken: "default-pat"}
+	var tok, routedBy string
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		tok = githubclient.TokenFromContext(r.Context())
+		routedBy, _ = r.Context().Value(routedByKey{}).(string)
+	})
+	handler := ownerRoute(next, cfg, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_me","arguments":{}}}`))
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if tok != "default-pat" {
+		t.Errorf("token = %q, want default-pat", tok)
+	}
+	if routedBy != config.RouteDefault {
+		t.Errorf("routed_by = %q, want %q", routedBy, config.RouteDefault)
+	}
+}
+
+func TestAuditLogRecordsRoutingFields(t *testing.T) {
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, callInfoKey{}, callInfo{tool: "get_issue", owner: "Alice"})
+	ctx = context.WithValue(ctx, routedByKey{}, config.RouteOwner)
+	ctx = context.WithValue(ctx, ownerKey{}, "Alice")
+	ctx = context.WithValue(ctx, ghLoginKey{}, "alice")
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil).WithContext(ctx)
+	auditLog(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(httptest.NewRecorder(), req)
+
+	out := buf.String()
+	for _, want := range []string{"tool=get_issue", "routed_by=owner", "owner=Alice", "gh_login=alice"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("audit log missing %q, got: %s", want, out)
+		}
+	}
+}
+
+// End-to-end owner-mode chain: bearerAuth → ownerRoute → auditLog. A valid
+// shared secret plus an owner argument must resolve the right PAT, attribute
+// the login, and leave the body intact for the transport.
+func TestOwnerModeChainEndToEnd(t *testing.T) {
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	cfg := &config.Config{
+		GitHubToken:  "default-pat",
+		SharedSecret: "shared-secret",
+		OwnerTokens:  []config.AuthEntry{{Key: "alice", PAT: "pat_alice"}},
+	}
+	patLogins := map[string]string{"pat_alice": "alice"}
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_issue","arguments":{"owner":"alice","repo":"demo"}}}`
+	var gotBody string
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+	})
+	handler := bearerAuth(ownerRoute(auditLog(next), cfg, patLogins), cfg)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer shared-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if gotBody != body {
+		t.Errorf("request body not preserved: %q", gotBody)
+	}
+	out := buf.String()
+	for _, want := range []string{"routed_by=owner", "owner=alice", "gh_login=alice"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("audit log missing %q, got: %s", want, out)
+		}
+	}
+
+	// A wrong secret is rejected before the body is buffered or routed.
+	buf.Reset()
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer nope")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("wrong secret: status = %d, want 401", rec.Code)
+	}
+	if buf.String() != "" {
+		t.Errorf("rejected requests must not be audited, got: %s", buf.String())
+	}
+}
