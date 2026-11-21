@@ -165,25 +165,13 @@ func RegisterIssues(r Registrar, client *github.Client) {
 		}
 		if labels, ok := req.GetArguments()["labels"]; ok {
 			// Presence matters: an empty array explicitly clears all labels.
-			if arr, ok := labels.([]any); ok {
-				ls := make([]string, 0, len(arr))
-				for _, item := range arr {
-					if s, ok := item.(string); ok {
-						ls = append(ls, s)
-					}
-				}
+			if ls, ok := stringListArg(labels); ok {
 				issueReq.Labels = &ls
 			}
 		}
 		if assignees, ok := req.GetArguments()["assignees"]; ok {
 			// Presence matters: an empty array explicitly clears all assignees.
-			if arr, ok := assignees.([]any); ok {
-				as := make([]string, 0, len(arr))
-				for _, item := range arr {
-					if s, ok := item.(string); ok {
-						as = append(as, s)
-					}
-				}
+			if as, ok := stringListArg(assignees); ok {
 				issueReq.Assignees = &as
 			}
 		}

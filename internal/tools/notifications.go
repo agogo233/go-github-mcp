@@ -40,7 +40,7 @@ func RegisterNotifications(r Registrar, client *github.Client) {
 
 	getThread := mcp.NewTool("get_notification_thread",
 		mcp.WithDescription("Get a single notification thread by ID."),
-		mcp.WithString("thread_id", mcp.Required(), mcp.Description("Notification thread ID")),
+		mcp.WithString("thread_id", mcp.Required(), mcp.Description("Notification thread ID (numeric string; passed as a string to avoid 64-bit ID overflow)")),
 	)
 	r.Add("notifications", false, getThread, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		threadID, err := req.RequireString("thread_id")
@@ -56,7 +56,7 @@ func RegisterNotifications(r Registrar, client *github.Client) {
 
 	markThreadRead := mcp.NewTool("mark_thread_read",
 		mcp.WithDescription("Mark a notification thread as read."),
-		mcp.WithString("thread_id", mcp.Required(), mcp.Description("Notification thread ID")),
+		mcp.WithString("thread_id", mcp.Required(), mcp.Description("Notification thread ID (numeric string; passed as a string to avoid 64-bit ID overflow)")),
 	)
 	r.Add("notifications", true, markThreadRead, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		threadID, err := req.RequireString("thread_id")

@@ -253,6 +253,24 @@ func validState(v string, allowed ...string) bool {
 	return false
 }
 
+// stringListArg converts a raw JSON argument (an array of strings, as
+// decoded from the MCP call arguments) into a []string, skipping non-string
+// items. ok reports whether the value was an array at all; presence matters
+// for callers where an empty array is meaningful (e.g. clearing all labels).
+func stringListArg(v any) (out []string, ok bool) {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil, false
+	}
+	out = make([]string, 0, len(arr))
+	for _, item := range arr {
+		if s, isStr := item.(string); isStr {
+			out = append(out, s)
+		}
+	}
+	return out, true
+}
+
 // withRepoArgs declares the standard owner/repo argument pair.
 func withRepoArgs() mcp.ToolOption {
 	return func(t *mcp.Tool) {
