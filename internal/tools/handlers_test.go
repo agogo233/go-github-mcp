@@ -323,3 +323,82 @@ func TestListWorkflowRunsNumericStringWorkflowID(t *testing.T) {
 		t.Errorf("expected the per-workflow API call, calls: %v", *calls)
 	}
 }
+
+func TestWorkflowTarget(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      map[string]any
+		wantID    int64
+		wantFile  string
+		wantError bool
+	}{
+		{"by numeric id", map[string]any{"workflow_id": float64(123)}, 123, "", false},
+		{"by numeric-string id", map[string]any{"workflow_id": "456"}, 456, "", false},
+		{"by file name", map[string]any{"workflow_file": "ci.yml"}, 0, "ci.yml", false},
+		{"file name with path", map[string]any{"workflow_file": ".github/workflows/ci.yml"}, 0, ".github/workflows/ci.yml", false},
+		{"empty id treated as absent", map[string]any{"workflow_id": ""}, 0, "", true},
+		{"empty file treated as absent", map[string]any{"workflow_file": " "}, 0, "", true},
+		{"both provided", map[string]any{"workflow_id": float64(1), "workflow_file": "ci.yml"}, 0, "", true},
+		{"neither provided", map[string]any{}, 0, "", true},
+		{"zero id", map[string]any{"workflow_id": float64(0)}, 0, "", true},
+		{"non-numeric id", map[string]any{"workflow_id": "abc"}, 0, "", true},
+		{"non-string file", map[string]any{"workflow_file": float64(7)}, 0, "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id, file, errRes := workflowTarget(reqWithArgs(tt.args), "test action")
+			if tt.wantError {
+				if errRes == nil {
+					t.Fatalf("workflowTarget(%v) = (%d, %q, nil), want error", tt.args, id, file)
+				}
+				return
+			}
+			if errRes != nil {
+				t.Fatalf("workflowTarget(%v) returned unexpected error: %v", tt.args, errRes.Content)
+			}
+			if id != tt.wantID || file != tt.wantFile {
+				t.Errorf("workflowTarget(%v) = (%d, %q), want (%d, %q)", tt.args, id, file, tt.wantID, tt.wantFile)
+			}
+		})
+	}
+}
+
+func TestDispatchWorkflowByFileName(t *testing.T) {
+	client, calls := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		return http.StatusNoContent, ``, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterActions(r, client)
+
+	text, isErr := callTool(t, r, "dispatch_workflow", map[string]any{
+		"owner":         "o",
+		"repo":          "r",
+		"ref":           "main",
+		"workflow_file": "ci.yml",
+		"inputs":        map[string]any{"branch": "feature"},
+	})
+	if isErr {
+		t.Fatalf("unexpected error result: %s", text)
+	}
+	if len(*calls) != 1 || !strings.Contains((*calls)[0], "/actions/workflows/ci.yml/dispatches") {
+		t.Errorf("expected the dispatch API call, calls: %v", *calls)
+	}
+}
+
+func TestDispatchWorkflowRequiresExactlyOneTarget(t *testing.T) {
+	client, calls := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		return http.StatusNoContent, ``, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterActions(r, client)
+
+	text, isErr := callTool(t, r, "dispatch_workflow", map[string]any{
+		"owner": "o", "repo": "r", "ref": "main",
+	})
+	if !isErr {
+		t.Fatalf("dispatch without workflow target must fail, got: %s", text)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("no API call must be made on argument error, calls: %v", *calls)
+	}
+}

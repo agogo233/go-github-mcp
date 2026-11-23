@@ -497,4 +497,171 @@ func RegisterActions(r Registrar, client *github.Client) {
 			"note":          "the archive is a zip; the URL is short-lived",
 		})
 	})
+
+	dispatchWorkflow := mcp.NewTool("dispatch_workflow",
+		mcp.WithDescription("Manually trigger a GitHub Actions workflow run (workflow_dispatch event). "+
+			"The workflow must declare the workflow_dispatch trigger; ref is the branch or tag to run against."),
+		withRepoArgs(),
+		mcp.WithString("ref", mcp.Required(), mcp.Description("Git reference to run the workflow against: a branch or tag name")),
+		mcp.WithObject("inputs", mcp.Description("Optional workflow_dispatch inputs as a JSON object (max 10 keys); keys must match the workflow's configured inputs")),
+		mcp.WithNumber("workflow_id", mcp.Description("Workflow ID (from list_workflows); use this or workflow_file, not both")),
+		mcp.WithString("workflow_file", mcp.Description("Workflow file name such as ci.yml or .github/workflows/ci.yml (use this or workflow_id, not both)")),
+	)
+	r.Add("actions", true, dispatchWorkflow, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		owner, repo, err := ownerRepo(req)
+		if err != nil {
+			return errResult("dispatch workflow", err)
+		}
+		ref, err := req.RequireString("ref")
+		if err != nil {
+			return errResult("dispatch workflow", err)
+		}
+		workflowID, workflowFile, errRes := workflowTarget(req, "dispatch workflow")
+		if errRes != nil {
+			return errRes, nil
+		}
+		var inputs map[string]any
+		if raw, ok := req.GetArguments()["inputs"]; ok && !isEmptyArg(raw) {
+			obj, isObj := raw.(map[string]any)
+			if !isObj {
+				res, _ := errResult("dispatch workflow", fmt.Errorf("argument %q must be a JSON object of input keys and values", "inputs"))
+				return res, nil
+			}
+			inputs = obj
+		}
+		event := github.CreateWorkflowDispatchEventRequest{Ref: ref, Inputs: inputs}
+		if workflowFile != "" {
+			_, err = client.Actions.CreateWorkflowDispatchEventByFileName(ctx, owner, repo, workflowFile, event)
+		} else {
+			_, err = client.Actions.CreateWorkflowDispatchEventByID(ctx, owner, repo, workflowID, event)
+		}
+		if err != nil {
+			return errResult("dispatch workflow", err)
+		}
+		result := map[string]any{"dispatched": true, "ref": ref}
+		if workflowFile != "" {
+			result["workflow_file"] = workflowFile
+		} else {
+			result["workflow_id"] = workflowID
+		}
+		return jsonResult(result)
+	})
+
+	enableWorkflow := mcp.NewTool("enable_workflow",
+		mcp.WithDescription("Enable a GitHub Actions workflow, setting its state to active so it can run."),
+		withRepoArgs(),
+		mcp.WithNumber("workflow_id", mcp.Description("Workflow ID (from list_workflows); use this or workflow_file, not both")),
+		mcp.WithString("workflow_file", mcp.Description("Workflow file name such as ci.yml or .github/workflows/ci.yml (use this or workflow_id, not both)")),
+	)
+	r.Add("actions", true, enableWorkflow, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		owner, repo, err := ownerRepo(req)
+		if err != nil {
+			return errResult("enable workflow", err)
+		}
+		workflowID, workflowFile, errRes := workflowTarget(req, "enable workflow")
+		if errRes != nil {
+			return errRes, nil
+		}
+		if workflowFile != "" {
+			_, err = client.Actions.EnableWorkflowByFileName(ctx, owner, repo, workflowFile)
+		} else {
+			_, err = client.Actions.EnableWorkflowByID(ctx, owner, repo, workflowID)
+		}
+		if err != nil {
+			return errResult("enable workflow", err)
+		}
+		result := map[string]any{"enabled": true}
+		if workflowFile != "" {
+			result["workflow_file"] = workflowFile
+		} else {
+			result["workflow_id"] = workflowID
+		}
+		return jsonResult(result)
+	})
+
+	disableWorkflow := mcp.NewTool("disable_workflow",
+		mcp.WithDescription("Disable a GitHub Actions workflow, setting its state to disabled so it cannot run."),
+		withRepoArgs(),
+		mcp.WithNumber("workflow_id", mcp.Description("Workflow ID (from list_workflows); use this or workflow_file, not both")),
+		mcp.WithString("workflow_file", mcp.Description("Workflow file name such as ci.yml or .github/workflows/ci.yml (use this or workflow_id, not both)")),
+	)
+	r.Add("actions", true, disableWorkflow, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		owner, repo, err := ownerRepo(req)
+		if err != nil {
+			return errResult("disable workflow", err)
+		}
+		workflowID, workflowFile, errRes := workflowTarget(req, "disable workflow")
+		if errRes != nil {
+			return errRes, nil
+		}
+		if workflowFile != "" {
+			_, err = client.Actions.DisableWorkflowByFileName(ctx, owner, repo, workflowFile)
+		} else {
+			_, err = client.Actions.DisableWorkflowByID(ctx, owner, repo, workflowID)
+		}
+		if err != nil {
+			return errResult("disable workflow", err)
+		}
+		result := map[string]any{"disabled": true}
+		if workflowFile != "" {
+			result["workflow_file"] = workflowFile
+		} else {
+			result["workflow_id"] = workflowID
+		}
+		return jsonResult(result)
+	})
+
+	rerunFailedJobs := mcp.NewTool("rerun_failed_jobs",
+		mcp.WithDescription("Re-run only the failed jobs of a GitHub Actions workflow run."),
+		withRepoArgs(),
+		mcp.WithNumber("run_id", mcp.Required(), mcp.Description("Workflow run ID")),
+	)
+	r.Add("actions", true, rerunFailedJobs, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		owner, repo, err := ownerRepo(req)
+		if err != nil {
+			return errResult("rerun failed jobs", err)
+		}
+		runID, errRes := int64Arg(req, "run_id", "rerun failed jobs")
+		if errRes != nil {
+			return errRes, nil
+		}
+		if _, err := client.Actions.RerunFailedJobsByID(ctx, owner, repo, runID); err != nil {
+			return errResult("rerun failed jobs", err)
+		}
+		return jsonResult(map[string]any{"rerun_failed_jobs_requested": runID})
+	})
+}
+
+// workflowTarget reads the workflow_id / workflow_file argument pair shared by
+// the workflow-level write tools. The GitHub API addresses a workflow either
+// by its numeric ID or by its file name, so exactly one of the two must be
+// provided; anything else is rejected with an actionable message. It returns
+// a non-nil error result when the pair is invalid.
+func workflowTarget(req mcp.CallToolRequest, action string) (int64, string, *mcp.CallToolResult) {
+	idRaw, hasID := req.GetArguments()["workflow_id"]
+	fileRaw, hasFile := req.GetArguments()["workflow_file"]
+	if hasID && isEmptyArg(idRaw) {
+		hasID = false
+	}
+	if hasFile && isEmptyArg(fileRaw) {
+		hasFile = false
+	}
+	if hasID == hasFile {
+		res, _ := errResult(action, fmt.Errorf("provide exactly one of %q or %q", "workflow_id", "workflow_file"))
+		return 0, "", res
+	}
+	if hasID {
+		id, ok := int64FromArg(req, "workflow_id")
+		if !ok || id <= 0 {
+			res, _ := errResult(action, fmt.Errorf("argument %q must be a positive integer workflow ID", "workflow_id"))
+			return 0, "", res
+		}
+		return id, "", nil
+	}
+	file, err := req.RequireString("workflow_file")
+	if err != nil || strings.TrimSpace(file) == "" {
+		res, _ := errResult(action, fmt.Errorf("argument %q must be a workflow file name such as %q", "workflow_file", "ci.yml"))
+		return 0, "", res
+	}
+	return 0, strings.TrimSpace(file), nil
 }

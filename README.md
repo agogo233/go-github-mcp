@@ -9,7 +9,7 @@ operate on GitHub through the REST/GraphQL APIs while the **personal access
 tokens (PATs) never leave the server container**.
 
 > Status: M4 — `stdio` + Streamable `HTTP` transports, config hardening,
-> toolset/read-only policy framework, and 100 tools across 18 toolsets
+> toolset/read-only policy framework, and 104 tools across 18 toolsets
 > (context, users, repos, git, issues, labels, pull_requests, actions,
 > notifications, gists, discussions, stargazers, orgs, code_security,
 > secret_protection, dependabot, security_advisories, projects).
@@ -275,8 +275,9 @@ MCP_TRANSPORT=http GITHUB_MCP_AUTH_TOKEN=local:github_pat_xxx ./bin/go-github-mc
 Enabled by default (`GITHUB_TOOLSETS=default`): `context`, `users`, `repos`,
 `issues`, `pull_requests`, `actions`. All other toolsets must be enabled
 explicitly, e.g. `GITHUB_TOOLSETS=default,git,labels` or `GITHUB_TOOLSETS=all`.
-The default set includes the actions write tools `rerun_workflow` and
-`cancel_workflow_run`; disable them with `READ_ONLY=true` or by trimming
+The default set includes the actions write tools `dispatch_workflow`,
+`enable_workflow`, `disable_workflow`, `rerun_workflow`, `rerun_failed_jobs`
+and `cancel_workflow_run`; disable them with `READ_ONLY=true` or by trimming
 `GITHUB_TOOLSETS`.
 
 | Toolset | Tools |
@@ -288,7 +289,7 @@ The default set includes the actions write tools `rerun_workflow` and
 | issues | `list_issues`, `get_issue`, `create_issue`, `update_issue`, `add_issue_comment`, `list_issue_comments`, `update_issue_comment`, `delete_issue_comment`, `search_issues`, `add_sub_issue`, `remove_sub_issue`, `list_issue_types` |
 | labels | `list_labels`, `get_label`, `create_label`, `update_label`, `delete_label`, `add_issue_labels`, `remove_issue_label` |
 | pull_requests | `list_pull_requests`, `get_pull_request`, `create_pull_request`, `update_pull_request`, `merge_pull_request`, `get_pull_request_files`, `get_pull_request_reviews`, `add_pull_request_comment`, `get_pull_request_status`, `search_pull_requests` |
-| actions | `list_workflows`, `get_workflow`, `list_workflow_runs`, `get_workflow_run`, `list_workflow_jobs`, `get_workflow_run_logs`, `get_job_logs`, `list_workflow_run_artifacts`, `get_workflow_run_artifact`, `rerun_workflow`, `cancel_workflow_run` |
+| actions | `list_workflows`, `get_workflow`, `list_workflow_runs`, `get_workflow_run`, `list_workflow_jobs`, `get_workflow_run_logs`, `get_job_logs`, `list_workflow_run_artifacts`, `get_workflow_run_artifact`, `dispatch_workflow`, `enable_workflow`, `disable_workflow`, `rerun_workflow`, `rerun_failed_jobs`, `cancel_workflow_run` |
 | notifications | `list_notifications`, `get_notification_thread`, `mark_thread_read` |
 | gists | `list_gists`, `get_gist`, `create_gist`, `update_gist`, `delete_gist` |
 | discussions | `list_discussions`, `get_discussion`, `create_discussion`, `list_discussion_comments`, `add_discussion_comment`, `list_discussion_categories` |
