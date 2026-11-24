@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/google/go-github/v72/github"
@@ -121,6 +122,59 @@ func RegisterGit(r Registrar, client *github.Client) {
 			return errResult("get commit", err)
 		}
 		return jsonResult(commit)
+	})
+
+	compareCommits := mcp.NewTool("compare_commits",
+		mcp.WithDescription("Compare two commits, branches or tags (base...head): returns status, "+
+			"ahead_by, behind_by, total_commits, the commits unique to head and the changed files. "+
+			"When comparing a fork against upstream (base=upstream-owner:main, head=your-owner:branch on the fork), "+
+			"behind_by counts how many commits upstream is ahead and ahead_by/commits are the local-only commits. "+
+			"format=diff or patch returns the raw diff/patch text instead of JSON."),
+		withRepoArgs(),
+		mcp.WithString("base", mcp.Required(), mcp.Description("Base ref: branch, tag or SHA (cross-fork format owner:branch)")),
+		mcp.WithString("head", mcp.Required(), mcp.Description("Head ref: branch, tag or SHA (cross-fork format owner:branch)")),
+		mcp.WithString("format", mcp.Description("Response format: json (default), diff or patch")),
+		withPagination(),
+	)
+	r.Add("git", false, compareCommits, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		owner, repo, err := ownerRepo(req)
+		if err != nil {
+			return errResult("compare commits", err)
+		}
+		base, err := req.RequireString("base")
+		if err != nil {
+			return errResult("compare commits", err)
+		}
+		head, err := req.RequireString("head")
+		if err != nil {
+			return errResult("compare commits", err)
+		}
+		switch format := req.GetString("format", "json"); format {
+		case "json":
+			comp, resp, err := client.Repositories.CompareCommits(ctx, owner, repo, base, head, listOptions(req))
+			if err != nil {
+				return errResult("compare commits", err)
+			}
+			return compareJSONResult(resp, trimComparison(comp))
+		case "diff", "patch":
+			rawType := github.Diff
+			if format == "patch" {
+				rawType = github.Patch
+			}
+			raw, _, err := client.Repositories.CompareCommitsRaw(ctx, owner, repo, base, head, github.RawOptions{Type: rawType})
+			if err != nil {
+				return errResult("compare commits", err)
+			}
+			if len(raw) > maxCompareBytes {
+				return mcp.NewToolResultError(fmt.Sprintf(
+					"compare %s is %d bytes, above the %d MiB limit; "+
+						"compare a narrower base...head range or fetch single commits with get_commit instead",
+					format, len(raw), maxCompareBytes>>20)), nil
+			}
+			return mcp.NewToolResultText(raw), nil
+		default:
+			return mcp.NewToolResultError(fmt.Sprintf("invalid format %q; use json, diff or patch", format)), nil
+		}
 	})
 
 	getBlob := mcp.NewTool("get_blob",
@@ -329,4 +383,74 @@ func pushFilesCommit(ctx context.Context, client *github.Client, owner, repo, br
 		return nil, fmt.Errorf("update ref (non-fast-forward rejected): %w", err)
 	}
 	return commit, nil
+}
+
+// maxCompareBytes caps the compare_commits payload. A diverged compare can
+// carry hundreds of commits each embedding file patches, which would flood
+// the agent context; oversized results are rejected with remediation hints
+// (same policy as get_blob).
+const maxCompareBytes = 1 << 20
+
+// compareResult is the trimmed compare_commits payload. The full base and
+// merge-base commit objects are dropped: base echoes an input and both
+// duplicate patches already available via get_commit; only the merge-base
+// SHA is kept to locate the fork point.
+type compareResult struct {
+	Status       *string                    `json:"status,omitempty"`
+	AheadBy      *int                       `json:"ahead_by,omitempty"`
+	BehindBy     *int                       `json:"behind_by,omitempty"`
+	TotalCommits *int                       `json:"total_commits,omitempty"`
+	MergeBaseSHA string                     `json:"merge_base_sha,omitempty"`
+	Commits      []*github.RepositoryCommit `json:"commits,omitempty"`
+	Files        []*github.CommitFile       `json:"files,omitempty"`
+	HTMLURL      *string                    `json:"html_url,omitempty"`
+	PermalinkURL *string                    `json:"permalink_url,omitempty"`
+	DiffURL      *string                    `json:"diff_url,omitempty"`
+	PatchURL     *string                    `json:"patch_url,omitempty"`
+}
+
+// trimComparison projects the API comparison onto compareResult.
+func trimComparison(comp *github.CommitsComparison) *compareResult {
+	if comp == nil {
+		return nil
+	}
+	return &compareResult{
+		Status:       comp.Status,
+		AheadBy:      comp.AheadBy,
+		BehindBy:     comp.BehindBy,
+		TotalCommits: comp.TotalCommits,
+		MergeBaseSHA: comp.MergeBaseCommit.GetSHA(),
+		Commits:      comp.Commits,
+		Files:        comp.Files,
+		HTMLURL:      comp.HTMLURL,
+		PermalinkURL: comp.PermalinkURL,
+		DiffURL:      comp.DiffURL,
+		PatchURL:     comp.PatchURL,
+	}
+}
+
+// compareJSONResult marshals the trimmed comparison with the same result
+// shape as jsonResultWithPage, enforcing the maxCompareBytes cap.
+func compareJSONResult(resp *github.Response, v any) (*mcp.CallToolResult, error) {
+	data, err := json.Marshal(normalizeNilSlice(v))
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to encode result: %v", err)), nil
+	}
+	if len(data) > maxCompareBytes {
+		return mcp.NewToolResultError(fmt.Sprintf(
+			"compare result is %d bytes, above the %d MiB limit; "+
+				"reduce per_page, compare a narrower base...head range, or use format=diff",
+			len(data), maxCompareBytes>>20)), nil
+	}
+	res := &mcp.CallToolResult{Content: []mcp.Content{mcp.TextContent{Type: "text", Text: string(data)}}}
+	if resp != nil {
+		meta := map[string]any{"has_next": resp.NextPage != 0}
+		if resp.NextPage != 0 {
+			meta["next_page"] = resp.NextPage
+		}
+		if encoded, err := json.Marshal(meta); err == nil {
+			res.Content = append(res.Content, mcp.TextContent{Type: "text", Text: string(encoded)})
+		}
+	}
+	return res, nil
 }

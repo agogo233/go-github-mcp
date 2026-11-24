@@ -119,14 +119,14 @@ func TestToolsetRegistryIsComplete(t *testing.T) {
 }
 
 // The registry is the single source of truth; this pins the documented
-// contract of 18 toolsets registering 104 tools in total.
+// contract of 18 toolsets registering 105 tools in total.
 func TestRegistryRegistersAllTools(t *testing.T) {
 	c := &countingRegistrar{}
 	for _, e := range toolsetRegistry {
 		e.register(c, github.NewClient(nil))
 	}
-	if c.n != 104 {
-		t.Fatalf("registry registered %d tools, want 104", c.n)
+	if c.n != 105 {
+		t.Fatalf("registry registered %d tools, want 105", c.n)
 	}
 }
 
@@ -192,7 +192,7 @@ func TestNewLogsSingleSummaryInsteadOfPerToolSkips(t *testing.T) {
 	if strings.Contains(out, "skipping tool excluded by policy") {
 		t.Errorf("per-tool skip lines must not appear at info level:\n%s", out)
 	}
-	// The summary must account for every registry tool (104, pinned above).
+	// The summary must account for every registry tool (105, pinned above).
 	line := ""
 	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
 		if strings.Contains(l, "tool registration complete") {
@@ -208,8 +208,8 @@ func TestNewLogsSingleSummaryInsteadOfPerToolSkips(t *testing.T) {
 		}
 		sum += v
 	}
-	if sum != 104 {
-		t.Errorf("summary accounts for %d tools, want 104", sum)
+	if sum != 105 {
+		t.Errorf("summary accounts for %d tools, want 105", sum)
 	}
 }
 
