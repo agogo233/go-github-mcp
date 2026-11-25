@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	mcpserver "github.com/mark3labs/mcp-go/server"
+
 	"github.com/agogo233/go-github-mcp/internal/config"
 	"github.com/agogo233/go-github-mcp/internal/githubclient"
 )
@@ -894,5 +896,77 @@ func TestAuthFailGuardPassesSuccessThrough(t *testing.T) {
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/mcp", nil))
 	if rec.Code != http.StatusTeapot {
 		t.Errorf("status = %d, want %d (guard must not interfere)", rec.Code, http.StatusTeapot)
+	}
+}
+
+// Regression: the Streamable HTTP transport must stay on the legacy protocol
+// negotiation path. go-sdk clients on the stateless 2026-07-28 core emit
+// notifications/cancelled without the modern _meta protocolVersion stamp;
+// under modern-era validation the server answers 400 and the client
+// connection is permanently poisoned (every later call fails with "client is
+// closing"). Pinned to 2025-11-25, notifications are accepted and
+// modern-era requests are refused with the supported version list so clients
+// negotiate down to the legacy path.
+func TestStreamableHandlerPinsLegacyProtocol(t *testing.T) {
+	discardLogs(t)
+	srv := mcpserver.NewMCPServer("test", "1.0.0")
+	ts := httptest.NewServer(streamableHandler(srv))
+	defer ts.Close()
+
+	post := func(body string, extra map[string]string) *http.Response {
+		req, err := http.NewRequest(http.MethodPost, ts.URL+endpointPath, strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		for k, v := range extra {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		t.Cleanup(func() { resp.Body.Close() })
+		return resp
+	}
+
+	// Initialize on the latest legacy revision to obtain a session.
+	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}`
+	resp := post(initBody, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("initialize status = %d, want 200", resp.StatusCode)
+	}
+	sessionID := resp.Header.Get("Mcp-Session-Id")
+	if sessionID == "" {
+		t.Fatal("initialize response missing Mcp-Session-Id")
+	}
+
+	// A legacy-era cancellation notification must be accepted without any
+	// _meta protocolVersion stamp — this is the failure mode that poisoned
+	// go-sdk client connections under modern-era validation.
+	notify := `{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"1","reason":"test"}}`
+	resp = post(notify, map[string]string{
+		"Mcp-Session-Id":       sessionID,
+		"MCP-Protocol-Version": "2025-11-25",
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("legacy notification status = %d, want 202", resp.StatusCode)
+	}
+
+	// A modern-era request must be refused with the supported version list so
+	// clients negotiate down instead of failing later on stamped-free
+	// notifications.
+	modern := `{"jsonrpc":"2.0","id":2,"method":"ping","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`
+	resp = post(modern, map[string]string{
+		"Mcp-Session-Id":       sessionID,
+		"MCP-Protocol-Version": "2026-07-28",
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("modern request status = %d, want 400", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"supported":["2025-11-25"]`) {
+		t.Errorf("modern rejection body = %s, want supported=[2025-11-25]", body)
 	}
 }

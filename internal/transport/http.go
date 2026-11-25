@@ -41,6 +41,19 @@ const (
 // secret are never logged.
 type ghLoginKey struct{}
 
+// streamableHandler builds the /mcp Streamable HTTP transport. The transport
+// is pinned to the latest legacy protocol revision: go-sdk clients on the
+// stateless 2026-07-28 core send notifications/cancelled without the
+// mandatory _meta protocolVersion stamp, which modern-era validation rejects
+// with 400 — permanently poisoning the client connection (every later call
+// fails with "client is closing"). Legacy negotiation has no such requirement.
+func streamableHandler(s *mcpserver.MCPServer) http.Handler {
+	return mcpserver.NewStreamableHTTPServer(s,
+		mcpserver.WithEndpointPath(endpointPath),
+		mcpserver.WithStreamableHTTPProtocolVersions(mcp.ProtocolVersion20251125),
+	)
+}
+
 // RunHTTP serves MCP over Streamable HTTP with Bearer authentication, an
 // unauthenticated /healthz probe, and per-client audit logging. WriteTimeout
 // is deliberately zero: the Streamable HTTP transport holds long-lived SSE
@@ -57,7 +70,7 @@ type ghLoginKey struct{}
 // Both maps feed the gh_login audit field and may be nil when the respective
 // mode is unused or authentication is disabled (ALLOW_UNAUTHENTICATED).
 func RunHTTP(ctx context.Context, s *mcpserver.MCPServer, cfg *config.Config, logins, patLogins map[string]string) error {
-	mcpHTTP := mcpserver.NewStreamableHTTPServer(s, mcpserver.WithEndpointPath(endpointPath))
+	mcpHTTP := streamableHandler(s)
 
 	mcpMux := http.NewServeMux()
 	mcpMux.Handle(endpointPath, mcpHTTP)
