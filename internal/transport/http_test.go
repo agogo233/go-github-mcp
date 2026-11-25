@@ -927,7 +927,7 @@ func TestStreamableHandlerPinsLegacyProtocol(t *testing.T) {
 		if err != nil {
 			t.Fatalf("POST: %v", err)
 		}
-		t.Cleanup(func() { resp.Body.Close() })
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		return resp
 	}
 
