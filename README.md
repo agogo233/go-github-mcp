@@ -289,7 +289,7 @@ and `cancel_workflow_run`; disable them with `READ_ONLY=true` or by trimming
 | issues | `list_issues`, `get_issue`, `create_issue`, `update_issue`, `add_issue_comment`, `list_issue_comments`, `update_issue_comment`, `delete_issue_comment`, `search_issues`, `add_sub_issue`, `remove_sub_issue`, `list_issue_types` |
 | labels | `list_labels`, `get_label`, `create_label`, `update_label`, `delete_label`, `add_issue_labels`, `remove_issue_label` |
 | pull_requests | `list_pull_requests`, `get_pull_request`, `create_pull_request`, `update_pull_request`, `merge_pull_request`, `get_pull_request_files`, `get_pull_request_reviews`, `add_pull_request_comment`, `get_pull_request_status`, `search_pull_requests` |
-| actions | `list_workflows`, `get_workflow`, `list_workflow_runs`, `get_workflow_run`, `list_workflow_jobs`, `get_workflow_run_logs`, `get_job_logs`, `list_workflow_run_artifacts`, `get_workflow_run_artifact`, `dispatch_workflow`, `enable_workflow`, `disable_workflow`, `rerun_workflow`, `rerun_failed_jobs`, `cancel_workflow_run` |
+| actions | `list_workflows`, `get_workflow`, `list_workflow_runs`, `get_workflow_run`, `wait_workflow_run`, `list_workflow_jobs`, `get_workflow_run_logs`, `get_job_logs`, `list_workflow_run_artifacts`, `get_workflow_run_artifact`, `dispatch_workflow`, `enable_workflow`, `disable_workflow`, `rerun_workflow`, `rerun_failed_jobs`, `cancel_workflow_run` |
 | notifications | `list_notifications`, `get_notification_thread`, `mark_thread_read` |
 | gists | `list_gists`, `get_gist`, `create_gist`, `update_gist`, `delete_gist` |
 | discussions | `list_discussions`, `get_discussion`, `create_discussion`, `list_discussion_comments`, `add_discussion_comment`, `list_discussion_categories` |

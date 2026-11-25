@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTailLinesKeepsLastN(t *testing.T) {
@@ -394,5 +395,155 @@ func TestFetchLogContentRejectsRedirectLoops(t *testing.T) {
 	}
 	if calls > 4 {
 		t.Errorf("followed %d requests, want at most initial + 3 redirects", calls)
+	}
+}
+
+func TestWaitWorkflowRunBlocksUntilCompleted(t *testing.T) {
+	var polls int
+	client, _ := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		polls++
+		if polls == 1 {
+			return http.StatusOK, `{"id":9,"status":"in_progress","conclusion":null}`, nil
+		}
+		return http.StatusOK, `{"id":9,"status":"completed","conclusion":"success"}`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterActions(r, client)
+
+	text, isErr := callTool(t, r, "wait_workflow_run", map[string]any{
+		"owner": "o", "repo": "r", "run_id": float64(9),
+		"timeout_seconds": float64(10), "poll_interval_seconds": float64(1),
+	})
+	if isErr {
+		t.Fatalf("unexpected error result: %s", text)
+	}
+	if !strings.Contains(text, `"status":"completed"`) || !strings.Contains(text, `"conclusion":"success"`) {
+		t.Errorf("unexpected payload: %s", text)
+	}
+	if polls < 2 {
+		t.Errorf("expected at least two polls, got %d", polls)
+	}
+}
+
+func TestWaitWorkflowRunReturnsTimedOutWaiting(t *testing.T) {
+	client, _ := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		return http.StatusOK, `{"id":9,"status":"in_progress","conclusion":null}`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterActions(r, client)
+
+	text, isErr := callTool(t, r, "wait_workflow_run", map[string]any{
+		"owner": "o", "repo": "r", "run_id": float64(9),
+		"timeout_seconds": float64(1), "poll_interval_seconds": float64(1),
+	})
+	if isErr {
+		t.Fatalf("timeout must be reported as a normal result, got error: %s", text)
+	}
+	if !strings.Contains(text, `"timed_out_waiting":true`) {
+		t.Errorf("payload must mark timed_out_waiting: %s", text)
+	}
+}
+
+func TestWaitWorkflowRunReturnsImmediatelyForCompletedRun(t *testing.T) {
+	var polls int
+	client, _ := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		polls++
+		return http.StatusOK, `{"id":9,"status":"completed","conclusion":"failure"}`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterActions(r, client)
+
+	text, isErr := callTool(t, r, "wait_workflow_run", map[string]any{
+		"owner": "o", "repo": "r", "run_id": float64(9),
+		"timeout_seconds": float64(10), "poll_interval_seconds": float64(1),
+	})
+	if isErr {
+		t.Fatalf("unexpected error result: %s", text)
+	}
+	if polls != 1 {
+		t.Errorf("completed run must not be polled again, polls=%d", polls)
+	}
+	if !strings.Contains(text, `"conclusion":"failure"`) {
+		t.Errorf("unexpected payload: %s", text)
+	}
+}
+
+func TestWaitWorkflowRunHonorsContextCancellation(t *testing.T) {
+	client, _ := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		return http.StatusOK, `{"id":9,"status":"in_progress","conclusion":null}`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterActions(r, client)
+	handler := r.handlers["wait_workflow_run"]
+	if handler == nil {
+		t.Fatal("wait_workflow_run was not registered")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := handler(ctx, reqWithArgs(map[string]any{
+			"owner": "o", "repo": "r", "run_id": float64(9),
+			"timeout_seconds": float64(60), "poll_interval_seconds": float64(1),
+		}))
+		done <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("expected context.Canceled from the handler")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not return after context cancellation")
+	}
+}
+
+func TestWaitWorkflowRunToleratesTransientFailures(t *testing.T) {
+	var polls int
+	client, _ := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		polls++
+		if polls <= 2 {
+			return http.StatusInternalServerError, `{"message":"boom"}`, nil
+		}
+		return http.StatusOK, `{"id":9,"status":"completed","conclusion":"success"}`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterActions(r, client)
+
+	text, isErr := callTool(t, r, "wait_workflow_run", map[string]any{
+		"owner": "o", "repo": "r", "run_id": float64(9),
+		"timeout_seconds": float64(10), "poll_interval_seconds": float64(1),
+	})
+	if isErr {
+		t.Fatalf("transient failures must not abort the wait, got: %s", text)
+	}
+	if polls < 3 {
+		t.Errorf("expected the success poll after two failures, polls=%d", polls)
+	}
+	if !strings.Contains(text, `"conclusion":"success"`) {
+		t.Errorf("unexpected payload: %s", text)
+	}
+}
+
+func TestWaitWorkflowRunRejectsInvalidArguments(t *testing.T) {
+	client, _ := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		return http.StatusOK, `{"id":9,"status":"in_progress","conclusion":null}`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterActions(r, client)
+
+	for _, args := range []map[string]any{
+		{"owner": "o", "repo": "r", "run_id": float64(9), "timeout_seconds": float64(9999)},
+		{"owner": "o", "repo": "r", "run_id": float64(9), "timeout_seconds": float64(-1)},
+		{"owner": "o", "repo": "r", "run_id": float64(9), "poll_interval_seconds": float64(0)},
+		{"owner": "o", "repo": "r", "run_id": float64(9), "poll_interval_seconds": float64(-1)},
+		{"owner": "o", "repo": "r", "run_id": float64(9), "poll_interval_seconds": float64(9999999)},
+	} {
+		_, isErr := callTool(t, r, "wait_workflow_run", args)
+		if !isErr {
+			t.Errorf("args %v must be rejected", args)
+		}
 	}
 }

@@ -30,6 +30,16 @@ var logHTTPClient = &http.Client{
 // maxLogBytes caps how much log content is read into memory per job.
 const maxLogBytes = 5 << 20
 
+// wait_workflow_run tuning: defaults sized for typical CI durations, with a
+// hard cap so a bad argument cannot pin a handler goroutine indefinitely.
+const (
+	waitDefaultTimeoutSeconds  = 600
+	waitMaxTimeoutSeconds      = 1800
+	waitDefaultIntervalSeconds = 20
+	waitMinIntervalSeconds     = 1
+	waitMaxConsecutiveFailures = 3
+)
+
 // fetchLogContent downloads a workflow log from its short-lived URL and
 // returns the last tail lines (default: last 10000 lines), plus whether the
 // scan hit the size cap before the log ended.
@@ -225,6 +235,81 @@ func RegisterActions(r Registrar, client *github.Client) {
 			return errResult("get workflow run", err)
 		}
 		return jsonResult(run)
+	})
+
+	waitWorkflowRun := mcp.NewTool("wait_workflow_run",
+		mcp.WithDescription(
+			"Block until a GitHub Actions workflow run completes, polling server-side so the caller waits once instead of polling. "+
+				"Returns the run JSON once status=completed; if the timeout elapses first, returns the current status with timed_out_waiting=true (call again to keep waiting). "+
+				"Already-completed runs return immediately."),
+		withRepoArgs(),
+		mcp.WithNumber("run_id", mcp.Required(), mcp.Description("Workflow run ID")),
+		mcp.WithNumber("timeout_seconds", mcp.Description("Max seconds to block; 0 checks once and returns immediately (default 600, max 1800)")),
+		mcp.WithNumber("poll_interval_seconds", mcp.Description("Seconds between GitHub API polls while waiting (default 20, min 1)")),
+	)
+	r.Add("actions", false, waitWorkflowRun, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		owner, repo, err := ownerRepo(req)
+		if err != nil {
+			return errResult("wait for workflow run", err)
+		}
+		runID, errRes := int64Arg(req, "run_id", "wait for workflow run")
+		if errRes != nil {
+			return errRes, nil
+		}
+		timeoutSecs := req.GetInt("timeout_seconds", waitDefaultTimeoutSeconds)
+		if timeoutSecs < 0 || timeoutSecs > waitMaxTimeoutSeconds {
+			return errResult("wait for workflow run", fmt.Errorf("timeout_seconds must be between 0 and %d, got %d", waitMaxTimeoutSeconds, timeoutSecs))
+		}
+		intervalSecs := req.GetInt("poll_interval_seconds", waitDefaultIntervalSeconds)
+		if intervalSecs < waitMinIntervalSeconds || intervalSecs > waitMaxTimeoutSeconds {
+			return errResult("wait for workflow run", fmt.Errorf("poll_interval_seconds must be between %d and %d, got %d", waitMinIntervalSeconds, waitMaxTimeoutSeconds, intervalSecs))
+		}
+		interval := time.Duration(intervalSecs) * time.Second
+		deadline := time.Now().Add(time.Duration(timeoutSecs) * time.Second)
+
+		consecutiveFailures := 0
+		for {
+			run, _, err := client.Actions.GetWorkflowRunByID(ctx, owner, repo, runID)
+			if err != nil {
+				// Transient API failures (5xx, network blips) must not abort a
+				// long wait; only give up after several polls in a row fail.
+				consecutiveFailures++
+				if consecutiveFailures >= waitMaxConsecutiveFailures {
+					return errResult("wait for workflow run", err)
+				}
+			} else {
+				consecutiveFailures = 0
+				if run.GetStatus() == "completed" {
+					return jsonResult(run)
+				}
+			}
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				if err != nil {
+					// The deadline hit while the last poll itself failed:
+					// report the API error rather than disguising it as a
+					// timeout (e.g. a wrong run_id must not read as
+					// "still waiting").
+					return errResult("wait for workflow run", err)
+				}
+				return jsonResult(map[string]any{
+					"timed_out_waiting": true,
+					"run_id":            runID,
+					"status":            run.GetStatus(),
+					"conclusion":        run.GetConclusion(),
+					"hint":              "run not finished; call wait_workflow_run again to continue waiting, or use get_workflow_run for a one-shot check",
+				})
+			}
+			sleepFor := interval
+			if sleepFor > remaining {
+				sleepFor = remaining
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(sleepFor):
+			}
+		}
 	})
 
 	listWorkflowJobs := mcp.NewTool("list_workflow_jobs",
