@@ -213,3 +213,75 @@ func TestCompareCommitsRejectsOversizedDiff(t *testing.T) {
 		t.Errorf("expected oversized-diff error, got (isErr=%v): %s", isErr, text)
 	}
 }
+
+// meta_only=true returns only the counters, dropping commits and files so
+// wide, long-diverged branches stay far below the payload cap.
+func TestCompareCommitsMetaOnly(t *testing.T) {
+	client, _ := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		return http.StatusOK, `{"status":"diverged","ahead_by":2,"behind_by":3,"total_commits":2,
+			"merge_base_commit":{"sha":"merge","commit":{"message":"merge"}},
+			"commits":[{"sha":"c1","commit":{"message":"one"}}],
+			"files":[{"filename":"a.go","status":"modified"}]}`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterGit(r, client)
+
+	text, isErr := callTool(t, r, "compare_commits", map[string]any{
+		"owner": "o", "repo": "r", "base": "main", "head": "feature", "meta_only": true,
+	})
+	if isErr {
+		t.Fatalf("unexpected error result: %s", text)
+	}
+	for _, want := range []string{`"ahead_by":2`, `"behind_by":3`, `"status":"diverged"`, `"merge_base_sha":"merge"`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("payload missing %s, got: %s", want, text)
+		}
+	}
+	for _, unwanted := range []string{`"sha":"c1"`, `"filename":"a.go"`, `"commits":`, `"files":`} {
+		if strings.Contains(text, unwanted) {
+			t.Errorf("meta_only payload must not contain %s, got: %s", unwanted, text)
+		}
+	}
+}
+
+// A 404 on compare names the owner-prefix pitfall: the cross-fork prefix is
+// the owner login name (zeroclaw-labs), not the repo name (zeroclaw).
+func TestCompareCommitsNotFoundHint(t *testing.T) {
+	client, _ := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		return http.StatusNotFound, `{"message":"Not Found"}`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterGit(r, client)
+
+	text, isErr := callTool(t, r, "compare_commits", map[string]any{
+		"owner": "zeroclaw-labs", "repo": "zeroclaw", "base": "zeroclaw:master", "head": "agogo233:main",
+	})
+	if !isErr {
+		t.Fatalf("expected error result, got: %s", text)
+	}
+	for _, want := range []string{"owner login name", "zeroclaw-labs:master", "zeroclaw:master"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("404 hint missing %q, got: %s", want, text)
+		}
+	}
+}
+
+// A 404 with a plain (same-repo) base must not suggest a misleading owner
+// prefix; it keeps a generic cross-fork hint instead.
+func TestCompareCommitsNotFoundHintPlainRef(t *testing.T) {
+	client, _ := newFakeGitHub(t, func(_ *http.Request) (int, string, http.Header) {
+		return http.StatusNotFound, `{"message":"Not Found"}`, nil
+	})
+	r := newRecordingRegistrar()
+	RegisterGit(r, client)
+
+	text, isErr := callTool(t, r, "compare_commits", map[string]any{
+		"owner": "o", "repo": "r", "base": "main", "head": "feature",
+	})
+	if !isErr {
+		t.Fatalf("expected error result, got: %s", text)
+	}
+	if !strings.Contains(text, "cross-fork") || strings.Contains(text, `"o:main", not "main"`) {
+		t.Errorf("unexpected plain-ref 404 hint, got: %s", text)
+	}
+}

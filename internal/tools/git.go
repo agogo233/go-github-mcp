@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"strings"
 
 	"github.com/google/go-github/v72/github"
 	mcp "github.com/mark3labs/mcp-go/mcp"
@@ -129,11 +131,16 @@ func RegisterGit(r Registrar, client *github.Client) {
 			"ahead_by, behind_by, total_commits, the commits unique to head and the changed files. "+
 			"When comparing a fork against upstream (base=upstream-owner:main, head=your-owner:branch on the fork), "+
 			"behind_by counts how many commits upstream is ahead and ahead_by/commits are the local-only commits. "+
+			"The owner prefix in base/head must be the owner login name, never the repo name "+
+			"(base=zeroclaw-labs:master, not zeroclaw:master). "+
+			"For wide divergences set meta_only=true (counts only) or per_page=1 to keep the payload small. "+
 			"format=diff or patch returns the raw diff/patch text instead of JSON."),
 		withRepoArgs(),
 		mcp.WithString("base", mcp.Required(), mcp.Description("Base ref: branch, tag or SHA (cross-fork format owner:branch)")),
 		mcp.WithString("head", mcp.Required(), mcp.Description("Head ref: branch, tag or SHA (cross-fork format owner:branch)")),
 		mcp.WithString("format", mcp.Description("Response format: json (default), diff or patch")),
+		mcp.WithBoolean("meta_only", mcp.Description("Return only status, ahead_by, behind_by, total_commits and merge_base_sha, "+
+			"dropping commits and files so wide divergences stay far below the payload cap")),
 		withPagination(),
 	)
 	r.Add("git", false, compareCommits, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -153,9 +160,26 @@ func RegisterGit(r Registrar, client *github.Client) {
 		case "json":
 			comp, resp, err := client.Repositories.CompareCommits(ctx, owner, repo, base, head, listOptions(req))
 			if err != nil {
+				if resp != nil && resp.StatusCode == http.StatusNotFound {
+					// A 404 here is almost always a malformed cross-fork ref:
+					// the owner prefix must be the owner login name, not the
+					// repo name (zeroclaw-labs:master, not zeroclaw:master).
+					if i := strings.LastIndex(base, ":"); i >= 0 {
+						return mcp.NewToolResultError(fmt.Sprintf(
+							"failed to compare commits: 404 not found. For cross-fork compares the owner prefix "+
+								"must be the owner login name, not the repository name (use %q, not %q); "+
+								"also check that both refs exist and are accessible with the current token",
+							owner+":"+base[i+1:], base)), nil
+					}
+					return mcp.NewToolResultError(fmt.Sprintf(
+						"failed to compare commits: 404 not found. If this is a cross-fork compare, prefix each ref "+
+							"with its owner login name (e.g. %q); also check that both refs exist and are accessible "+
+							"with the current token",
+						owner+":"+base)), nil
+				}
 				return errResult("compare commits", err)
 			}
-			return compareJSONResult(resp, trimComparison(comp))
+			return compareJSONResult(resp, trimComparison(comp, req.GetBool("meta_only", false)))
 		case "diff", "patch":
 			rawType := github.Diff
 			if format == "patch" {
@@ -409,24 +433,30 @@ type compareResult struct {
 	PatchURL     *string                    `json:"patch_url,omitempty"`
 }
 
-// trimComparison projects the API comparison onto compareResult.
-func trimComparison(comp *github.CommitsComparison) *compareResult {
+// trimComparison projects the API comparison onto compareResult. With
+// metaOnly the per-commit and per-file payloads are dropped: callers asking
+// only for the ahead/behind counters get a payload that stays far below the
+// response cap even for wide, long-diverged branches.
+func trimComparison(comp *github.CommitsComparison, metaOnly bool) *compareResult {
 	if comp == nil {
 		return nil
 	}
-	return &compareResult{
+	res := &compareResult{
 		Status:       comp.Status,
 		AheadBy:      comp.AheadBy,
 		BehindBy:     comp.BehindBy,
 		TotalCommits: comp.TotalCommits,
 		MergeBaseSHA: comp.MergeBaseCommit.GetSHA(),
-		Commits:      comp.Commits,
-		Files:        comp.Files,
 		HTMLURL:      comp.HTMLURL,
 		PermalinkURL: comp.PermalinkURL,
 		DiffURL:      comp.DiffURL,
 		PatchURL:     comp.PatchURL,
 	}
+	if !metaOnly {
+		res.Commits = comp.Commits
+		res.Files = comp.Files
+	}
+	return res
 }
 
 // compareJSONResult marshals the trimmed comparison with the same result
