@@ -40,6 +40,13 @@ func TestToolAllowed(t *testing.T) {
 		{"github_tools allow-list hit", &config.Config{Toolsets: []string{"all"}, Tools: []string{"create_issue"}}, "issues", "create_issue", true, true},
 		{"github_tools cannot bypass read-only", &config.Config{ReadOnly: true, Toolsets: []string{"all"}, Tools: []string{"create_issue"}}, "issues", "create_issue", true, false},
 		{"github_tools cannot bypass toolsets", &config.Config{Toolsets: []string{"default"}, Tools: []string{"list_branches"}}, "git", "list_branches", false, false},
+		{"default pulls in compare_commits", base, "git", "compare_commits", false, true},
+		{"default keeps other git tools disabled", base, "git", "get_commit", false, false},
+		{"github_tools still gates default pull-in", &config.Config{Toolsets: []string{"default"}, Tools: []string{"get_me"}}, "git", "compare_commits", false, false},
+		{"default selector required for pull-in", &config.Config{Toolsets: []string{"issues"}}, "git", "compare_commits", false, false},
+		{"all enables the pulled-in tool too", &config.Config{Toolsets: []string{"all"}}, "git", "compare_commits", false, true},
+		{"github_tools allow-list hits pulled-in tool", &config.Config{Toolsets: []string{"default"}, Tools: []string{"compare_commits"}}, "git", "compare_commits", false, true},
+		{"read-only keeps the read-only pull-in", &config.Config{ReadOnly: true, Toolsets: []string{"default"}}, "git", "compare_commits", false, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

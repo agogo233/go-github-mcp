@@ -9,7 +9,7 @@ operate on GitHub through the REST/GraphQL APIs while the **personal access
 tokens (PATs) never leave the server container**.
 
 > Status: M4 — `stdio` + Streamable `HTTP` transports, config hardening,
-> toolset/read-only policy framework, and 105 tools across 18 toolsets
+> toolset/read-only policy framework, and 106 tools across 18 toolsets
 > (context, users, repos, git, issues, labels, pull_requests, actions,
 > notifications, gists, discussions, stargazers, orgs, code_security,
 > secret_protection, dependabot, security_advisories, projects).
@@ -273,7 +273,8 @@ MCP_TRANSPORT=http GITHUB_MCP_AUTH_TOKEN=local:github_pat_xxx ./bin/go-github-mc
 ## Tools (M4)
 
 Enabled by default (`GITHUB_TOOLSETS=default`): `context`, `users`, `repos`,
-`issues`, `pull_requests`, `actions`. All other toolsets must be enabled
+`issues`, `pull_requests`, `actions`, plus the read-only git tool
+`compare_commits`. All other toolsets must be enabled
 explicitly, e.g. `GITHUB_TOOLSETS=default,git,labels` or `GITHUB_TOOLSETS=all`.
 The default set includes the actions write tools `dispatch_workflow`,
 `enable_workflow`, `disable_workflow`, `rerun_workflow`, `rerun_failed_jobs`

@@ -60,6 +60,24 @@ var defaultToolsets = map[string]bool{
 	"actions":       true,
 }
 
+// defaultTools maps individual tool names to their parent toolset. These
+// tools are enabled by GITHUB_TOOLSETS=default even though their toolset is
+// opt-in. compare_commits is read-only and the standard way to check how far
+// a fork has diverged from upstream, so it ships in the default set.
+var defaultTools = map[string]string{
+	"compare_commits": "git",
+}
+
+// defaultToolEnabled reports whether an individual tool is pulled into the
+// default set by name. It only applies when the "default" selector is
+// present; explicit toolset lists are never widened implicitly.
+func defaultToolEnabled(cfg *config.Config, toolset, tool string) bool {
+	if defaultTools[tool] != toolset {
+		return false
+	}
+	return slices.Contains(cfg.Toolsets, "default")
+}
+
 // knownToolsets lists every toolset name the server can register, plus the
 // special selectors "all" and "default".
 var knownToolsets = func() map[string]bool {
@@ -198,7 +216,7 @@ func toolAllowed(cfg *config.Config, toolset, tool string, writable bool) (bool,
 	if len(cfg.Tools) > 0 && !slices.Contains(cfg.Tools, tool) {
 		return false, reasonAllowList
 	}
-	if !toolsetEnabled(cfg, toolset) {
+	if !toolsetEnabled(cfg, toolset) && !defaultToolEnabled(cfg, toolset, tool) {
 		return false, reasonToolset
 	}
 	return true, ""
@@ -206,7 +224,7 @@ func toolAllowed(cfg *config.Config, toolset, tool string, writable bool) (bool,
 
 // toolsetEnabled reports whether a toolset is enabled by GITHUB_TOOLSETS.
 // "all" enables everything; "default" enables the curated default set in
-// defaultToolsets.
+// defaultToolsets, plus the individual tools pulled in via defaultTools.
 func toolsetEnabled(cfg *config.Config, name string) bool {
 	all := false
 	def := false
